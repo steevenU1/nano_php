@@ -1,4 +1,5 @@
 <?php
+// inventario_central.php
 session_start();
 if (!isset($_SESSION['id_usuario']) || $_SESSION['rol'] !== 'Admin') {
     header("Location: 403.php");
@@ -9,28 +10,51 @@ include 'db.php';
 include 'navbar.php';
 
 // ===============================
-//   Obtener ID de Eulalia
+//   Obtener ID de "Almacen Angelopolis"
 // ===============================
-$idEulalia = 0;
-$res = $conn->query("SELECT id FROM sucursales WHERE nombre='Eulalia' LIMIT 1");
+$idCentral = 0;
+
+// 1) Búsqueda exacta (recomendado que el nombre en BD sea EXACTO)
+$stmt = $conn->prepare("SELECT id FROM sucursales WHERE nombre = ? LIMIT 1");
+$nombreCentralExacto = 'Almacen Angelopolis';
+$stmt->bind_param("s", $nombreCentralExacto);
+$stmt->execute();
+$res = $stmt->get_result();
 if ($res && $row = $res->fetch_assoc()) {
-    $idEulalia = (int)$row['id'];
+    $idCentral = (int)$row['id'];
 }
-if ($idEulalia <= 0) {
-    die("No se encontró la sucursal 'Eulalia'. Verifica el catálogo de sucursales.");
+$stmt->close();
+
+// 2) Respaldo: búsqueda por LIKE si no se encontró exacto
+if ($idCentral <= 0) {
+    $stmt = $conn->prepare("SELECT id FROM sucursales WHERE nombre LIKE ? LIMIT 1");
+    $like = '%Angelopolis%';
+    $stmt->bind_param("s", $like);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    if ($res && $row = $res->fetch_assoc()) {
+        $idCentral = (int)$row['id'];
+    }
+    $stmt->close();
+}
+
+if ($idCentral <= 0) {
+    die("No se encontró la sucursal de Inventario Central ('Almacen Angelopolis'). Verifica el catálogo de sucursales.");
 }
 
 // ===============================
 //   Filtros
 // ===============================
-$fImei        = $_GET['imei']         ?? '';
-$fTipo        = $_GET['tipo_producto']?? '';
-$fEstatus     = $_GET['estatus']      ?? '';
-$fAntiguedad  = $_GET['antiguedad']   ?? '';
-$fPrecioMin   = $_GET['precio_min']   ?? '';
-$fPrecioMax   = $_GET['precio_max']   ?? '';
+$fImei        = $_GET['imei']          ?? '';
+$fTipo        = $_GET['tipo_producto'] ?? '';
+$fEstatus     = $_GET['estatus']       ?? '';
+$fAntiguedad  = $_GET['antiguedad']    ?? '';
+$fPrecioMin   = $_GET['precio_min']    ?? '';
+$fPrecioMax   = $_GET['precio_max']    ?? '';
 
-// Construir SQL
+// ===============================
+//   Consulta
+// ===============================
 $sql = "
 SELECT 
     i.id,
@@ -45,13 +69,14 @@ INNER JOIN productos p ON p.id = i.id_producto
 WHERE i.id_sucursal = ?
 ";
 
-$params = [$idEulalia];
+$params = [$idCentral];
 $types  = "i";
 
 if ($fImei !== '') {
     $sql .= " AND (p.imei1 LIKE ? OR p.imei2 LIKE ?)";
-    $like = "%".$fImei."%";
-    $params[] = $like; $params[] = $like;
+    $likeImei = "%".$fImei."%";
+    $params[] = $likeImei; 
+    $params[] = $likeImei;
     $types   .= "ss";
 }
 if ($fTipo !== '') {
@@ -86,7 +111,6 @@ $sql .= " ORDER BY i.fecha_ingreso DESC";
 
 $stmt = $conn->prepare($sql);
 if (!$stmt) { die("Error de consulta: ".$conn->error); }
-
 $stmt->bind_param($types, ...$params);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -107,7 +131,7 @@ $stmt->close();
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Inventario – Almacén Eulalia</title>
+    <title>Inventario — Central (Almacen Angelopolis)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <!-- CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
@@ -115,7 +139,7 @@ $stmt->close();
 </head>
 <body class="bg-light">
 <div class="container mt-4">
-    <h2>📦 Inventario — Almacén Eulalia</h2>
+    <h2>📦 Inventario — Central (Almacen Angelopolis)</h2>
     <p class="text-muted mb-3">Total de equipos: <b><?= count($inventario) ?></b></p>
 
     <!-- Filtros -->
@@ -127,17 +151,17 @@ $stmt->close();
             <div class="col-md-2">
                 <select name="tipo_producto" class="form-select">
                     <option value="">Todos los tipos</option>
-                    <option value="Equipo"  <?= $fTipo==='Equipo'?'selected':'' ?>>Equipo</option>
-                    <option value="Modem"   <?= $fTipo==='Modem'?'selected':'' ?>>Módem</option>
-                    <option value="Accesorio" <?= $fTipo==='Accesorio'?'selected':'' ?>>Accesorio</option>
+                    <option value="Equipo"     <?= $fTipo==='Equipo'?'selected':'' ?>>Equipo</option>
+                    <option value="Modem"      <?= $fTipo==='Modem'?'selected':'' ?>>Módem</option>
+                    <option value="Accesorio"  <?= $fTipo==='Accesorio'?'selected':'' ?>>Accesorio</option>
                 </select>
             </div>
             <div class="col-md-2">
                 <select name="estatus" class="form-select">
                     <option value="">Todos Estatus</option>
-                    <option value="Disponible" <?= $fEstatus==='Disponible'?'selected':'' ?>>Disponible</option>
+                    <option value="Disponible"  <?= $fEstatus==='Disponible'?'selected':'' ?>>Disponible</option>
                     <option value="En tránsito" <?= $fEstatus==='En tránsito'?'selected':'' ?>>En tránsito</option>
-                    <option value="Vendido" <?= $fEstatus==='Vendido'?'selected':'' ?>>Vendido</option>
+                    <option value="Vendido"     <?= $fEstatus==='Vendido'?'selected':'' ?>>Vendido</option>
                 </select>
             </div>
             <div class="col-md-2">
@@ -156,7 +180,7 @@ $stmt->close();
             </div>
             <div class="col-12 text-end">
                 <button class="btn btn-primary">Filtrar</button>
-                <a href="almacen_eulalia.php" class="btn btn-secondary">Limpiar</a>
+                <a href="inventario_central.php" class="btn btn-secondary">Limpiar</a>
             </div>
         </div>
     </form>
@@ -197,9 +221,9 @@ $stmt->close();
 
     <!-- Tabla -->
     <div class="card shadow">
-        <div class="card-header bg-primary text-white">Inventario actual en Eulalia</div>
+        <div class="card-header bg-primary text-white">Inventario actual — Central</div>
         <div class="card-body">
-            <table id="tablaEulalia" class="table table-striped table-bordered table-sm">
+            <table id="tablaCentral" class="table table-striped table-bordered table-sm">
                 <thead class="table-dark">
                     <tr>
                         <th>ID Inv</th>
@@ -248,7 +272,7 @@ $stmt->close();
 <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
 <script>
 $(function(){
-  $('#tablaEulalia').DataTable({
+  $('#tablaCentral').DataTable({
     pageLength: 25,
     order: [[ 0, 'desc' ]],
     language: { url: '//cdn.datatables.net/plug-ins/1.13.4/i18n/es-ES.json' }

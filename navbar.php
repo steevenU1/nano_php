@@ -227,7 +227,7 @@ $esAdmin = in_array($rolUsuario, ['Admin','Super']);
                 <li><hr class="dropdown-divider"></li>
                 <li class="dropdown-header">Administrador</li>
                 <li><a class="dropdown-item" href="inventario_resumen.php">Resumen Global</a></li>
-                <li><a class="dropdown-item" href="inventario_eulalia.php">Inventario Eulalia</a></li>
+                <li><a class="dropdown-item" href="inventario_central.php">Inventario Angelopolis</a></li>
                 <li><a class="dropdown-item" href="inventario_retiros.php">🛑 Retiros de Inventario</a></li>
               <?php endif; ?>
             <?php endif; ?>
@@ -261,7 +261,7 @@ $esAdmin = in_array($rolUsuario, ['Admin','Super']);
           </a>
           <ul class="dropdown-menu dropdown-menu-dark">
             <?php if (in_array($rolUsuario, ['Admin','Super'])): ?>
-              <li><a class="dropdown-item" href="generar_traspaso.php">Generar traspaso desde Eulalia</a></li>
+              <li><a class="dropdown-item" href="generar_traspaso.php">Generar traspaso desde Central</a></li>
             <?php endif; ?>
             <li><a class="dropdown-item" href="generar_traspaso_sims.php">Generar traspaso SIMs</a></li>
             <li><hr class="dropdown-divider"></li>
