@@ -55,78 +55,93 @@ $stmtUsuarios = $conn->prepare($sqlUsuarios);
 $stmtUsuarios->bind_param("i", $id_sucursal);
 $stmtUsuarios->execute();
 $usuarios = $stmtUsuarios->get_result();
+$stmtUsuarios->close();
 
-// 🔹 Construir WHERE base
-$where = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ?";
+// ==================================================
+// 🔹 Construcción de filtros (excluyendo Master Admin)
+// ==================================================
+$joinSuc = " INNER JOIN sucursales s ON s.id = v.id_sucursal ";
+
+$where = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ? AND s.subtipo = 'Propia' ";
 $params = [$inicioSemana, $finSemana];
 $types = "ss";
 
 // 🔹 Filtro según rol
 if ($_SESSION['rol'] == 'Ejecutivo') {
-    $where .= " AND v.id_usuario=?";
+    $where .= " AND v.id_usuario=? ";
     $params[] = $_SESSION['id_usuario'];
     $types .= "i";
 } elseif ($_SESSION['rol'] == 'Gerente') {
-    $where .= " AND v.id_sucursal=?";
+    $where .= " AND v.id_sucursal=? ";
     $params[] = $_SESSION['id_sucursal'];
     $types .= "i";
 }
-// Admin ve todas
+// Admin ve todas (pero solo Propias por el filtro de arriba)
 
 // 🔹 Filtros GET
 if (!empty($_GET['tipo_venta'])) {
-    $where .= " AND v.tipo_venta=?";
+    $where .= " AND v.tipo_venta=? ";
     $params[] = $_GET['tipo_venta'];
     $types .= "s";
 }
 if (!empty($_GET['usuario'])) {
-    $where .= " AND v.id_usuario=?";
+    $where .= " AND v.id_usuario=? ";
     $params[] = $_GET['usuario'];
     $types .= "i";
 }
 if (!empty($_GET['buscar'])) {
-    $where .= " AND (v.nombre_cliente LIKE ? OR v.telefono_cliente LIKE ? OR v.tag LIKE ?
-                     OR EXISTS(SELECT 1 FROM detalle_venta dv WHERE dv.id_venta=v.id AND dv.imei1 LIKE ?))";
+    $where .= " AND (
+        v.nombre_cliente LIKE ? 
+        OR v.telefono_cliente LIKE ? 
+        OR v.tag LIKE ?
+        OR EXISTS(
+            SELECT 1 FROM detalle_venta dv 
+            WHERE dv.id_venta=v.id AND dv.imei1 LIKE ?
+        )
+    )";
     $busqueda = "%".$_GET['buscar']."%";
     array_push($params, $busqueda, $busqueda, $busqueda, $busqueda);
     $types .= "ssss";
 }
 
-// 🔹 Calcular tarjetas resumen
+// 🔹 Tarjetas resumen (unidades y comisiones)
 $sqlResumen = "
     SELECT 
         COUNT(dv.id) AS total_unidades,
         IFNULL(SUM(dv.comision_regular + dv.comision_especial),0) AS total_comisiones
     FROM detalle_venta dv
     INNER JOIN ventas v ON dv.id_venta = v.id
+    $joinSuc
     $where
 ";
 $stmtResumen = $conn->prepare($sqlResumen);
 $stmtResumen->bind_param($types, ...$params);
 $stmtResumen->execute();
 $resumen = $stmtResumen->get_result()->fetch_assoc();
-$totalUnidades = (int)$resumen['total_unidades'];
-$totalComisiones = (float)$resumen['total_comisiones'];
+$totalUnidades = (int)($resumen['total_unidades'] ?? 0);
+$totalComisiones = (float)($resumen['total_comisiones'] ?? 0.0);
 $stmtResumen->close();
 
 // 🔹 Monto total vendido
 $sqlMonto = "
     SELECT IFNULL(SUM(v.precio_venta),0) AS total_monto
     FROM ventas v
+    $joinSuc
     $where
 ";
 $stmtMonto = $conn->prepare($sqlMonto);
 $stmtMonto->bind_param($types, ...$params);
 $stmtMonto->execute();
-$totalMonto = (float)$stmtMonto->get_result()->fetch_assoc()['total_monto'];
+$totalMonto = (float)($stmtMonto->get_result()->fetch_assoc()['total_monto'] ?? 0.0);
 $stmtMonto->close();
 
-// 🔹 Consulta ventas
+// 🔹 Consulta lista de ventas
 $sqlVentas = "
     SELECT v.id, v.tag, v.nombre_cliente, v.telefono_cliente, v.tipo_venta,
            v.precio_venta, v.fecha_venta,
            u.id AS id_usuario, u.nombre AS usuario
     FROM ventas v
+    $joinSuc
     INNER JOIN usuarios u ON v.id_usuario = u.id
     $where
     ORDER BY v.fecha_venta DESC
@@ -135,8 +150,9 @@ $stmt = $conn->prepare($sqlVentas);
 $stmt->bind_param($types, ...$params);
 $stmt->execute();
 $ventas = $stmt->get_result();
+$stmt->close();
 
-// 🔹 Consultar detalles con precio_lista
+// 🔹 Consultar detalles con precio_lista (no requiere filtro por subtipo aquí; se asocia por id_venta mostrado)
 $sqlDetalle = "
     SELECT dv.id_venta, p.marca, p.modelo, p.color, dv.imei1,
            dv.comision_regular, dv.comision_especial, dv.comision,
@@ -150,6 +166,7 @@ $detalles = [];
 while ($row = $detalleResult->fetch_assoc()) {
     $detalles[$row['id_venta']][] = $row;
 }
+$detalleResult->close();
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -199,7 +216,7 @@ while ($row = $detalleResult->fetch_assoc()) {
                         <p class="display-6">No disponible</p>
                     <?php else: ?>
                         <p class="display-6">$<?= number_format($totalComisiones, 2) ?></p>
-                        <small class="text-muted">* Aproximado, sujeto a recálculo semanal</small>
+                        <small class="text-muted">* Aproximado, sujeto para recálculo semanal</small>
                     <?php endif; ?>
                 </div>
             </div>
@@ -258,10 +275,10 @@ while ($row = $detalleResult->fetch_assoc()) {
         <div class="venta-card">
             <div class="venta-header d-flex justify-content-between align-items-center">
                 <div>
-                    <strong>ID Venta: <?= $venta['id'] ?></strong> - <?= $venta['tipo_venta'] ?>
+                    <strong>ID Venta: <?= (int)$venta['id'] ?></strong> - <?= htmlspecialchars($venta['tipo_venta']) ?>
                 </div>
                 <div class="d-flex align-items-center">
-                    Fecha: <?= $venta['fecha_venta'] ?>
+                    Fecha: <?= htmlspecialchars($venta['fecha_venta']) ?>
                     
                     <!-- 🔹 Botón eliminar con lógica de permisos -->
                     <?php 
@@ -275,7 +292,7 @@ while ($row = $detalleResult->fetch_assoc()) {
                         if ($puedeEliminar):
                     ?>
                         <form action="eliminar_venta.php" method="POST" style="display:inline;">
-                            <input type="hidden" name="id_venta" value="<?= $venta['id'] ?>">
+                            <input type="hidden" name="id_venta" value="<?= (int)$venta['id'] ?>">
                             <button type="submit" 
                                     class="btn btn-sm btn-danger ms-2"
                                     onclick="return confirm('¿Seguro que deseas eliminar esta venta?\nEsto devolverá los equipos al inventario y quitará la comisión.')">
@@ -287,10 +304,10 @@ while ($row = $detalleResult->fetch_assoc()) {
             </div>
             <div class="p-3">
                 <p>
-                    <strong>TAG:</strong> <?= $venta['tag'] ?> |
-                    <strong>Cliente:</strong> <?= $venta['nombre_cliente'] ?> (<?= $venta['telefono_cliente'] ?>) |
-                    <strong>Precio:</strong> $<?= number_format($venta['precio_venta'], 2) ?> |
-                    <strong>Vendedor:</strong> <?= $venta['usuario'] ?>
+                    <strong>TAG:</strong> <?= htmlspecialchars($venta['tag']) ?> |
+                    <strong>Cliente:</strong> <?= htmlspecialchars($venta['nombre_cliente']) ?> (<?= htmlspecialchars($venta['telefono_cliente']) ?>) |
+                    <strong>Precio:</strong> $<?= number_format((float)$venta['precio_venta'], 2) ?> |
+                    <strong>Vendedor:</strong> <?= htmlspecialchars($venta['usuario']) ?>
                 </p>
 
                 <table class="table table-sm table-bordered mb-0">
@@ -315,21 +332,21 @@ while ($row = $detalleResult->fetch_assoc()) {
                                 foreach ($detalles[$venta['id']] as $equipo): 
                             ?>
                                 <tr>
-                                    <td><?= $equipo['marca'] ?></td>
-                                    <td><?= $equipo['modelo'] ?></td>
-                                    <td><?= $equipo['color'] ?></td>
-                                    <td><?= $equipo['imei1'] ?></td>
+                                    <td><?= htmlspecialchars($equipo['marca']) ?></td>
+                                    <td><?= htmlspecialchars($equipo['modelo']) ?></td>
+                                    <td><?= htmlspecialchars($equipo['color']) ?></td>
+                                    <td><?= htmlspecialchars($equipo['imei1']) ?></td>
                                     <td>
                                         <?php if ($esPrincipal): ?>
-                                            $<?= number_format($equipo['precio_lista'], 2) ?>
+                                            $<?= number_format((float)$equipo['precio_lista'], 2) ?>
                                         <?php else: ?>
                                             -
                                         <?php endif; ?>
                                     </td>
                                     <?php if (!$esSubdistribuidor): ?>
-                                        <td>$<?= number_format($equipo['comision_regular'], 2) ?></td>
-                                        <td>$<?= number_format($equipo['comision_especial'], 2) ?></td>
-                                        <td>$<?= number_format($equipo['comision'], 2) ?></td>
+                                        <td>$<?= number_format((float)$equipo['comision_regular'], 2) ?></td>
+                                        <td>$<?= number_format((float)$equipo['comision_especial'], 2) ?></td>
+                                        <td>$<?= number_format((float)$equipo['comision'], 2) ?></td>
                                     <?php endif; ?>
                                 </tr>
                             <?php 

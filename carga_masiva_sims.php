@@ -5,6 +5,7 @@ if (!isset($_SESSION['id_usuario']) || $_SESSION['rol'] != 'Admin') {
     exit();
 }
 
+include 'navbar.php';
 include 'db.php';
 
 // ========= Config =========
@@ -15,11 +16,11 @@ $msg = '';
 $previewRows = []; // solo para mostrar hasta PREVIEW_LIMIT
 $contador = ['total' => 0, 'ok' => 0, 'ignoradas' => 0];
 
-// ID sucursal Eulalia (almacén)
-$idEulalia = 0;
-$resEulalia = $conn->query("SELECT id FROM sucursales WHERE nombre='Eulalia' LIMIT 1");
-if ($resEulalia && $rowE = $resEulalia->fetch_assoc()) {
-    $idEulalia = (int)$rowE['id'];
+// ID sucursal por defecto (Almacén Angelopolis)
+$idDefaultAlmacen = 0;
+$resDefault = $conn->query("SELECT id FROM sucursales WHERE nombre IN ('Almacén Angelopolis','Almacen Angelopolis') LIMIT 1");
+if ($resDefault && $rowDef = $resDefault->fetch_assoc()) {
+    $idDefaultAlmacen = (int)$rowDef['id'];
 }
 
 // Cache de búsqueda de sucursal por nombre para no consultar BD por cada fila
@@ -91,8 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'previ
 
                         // sucursal
                         if ($nombre_sucursal === '') {
-                            $id_sucursal     = $idEulalia;
-                            $nombre_sucursal = 'Eulalia (por defecto)';
+                            $id_sucursal     = $idDefaultAlmacen;
+                            $nombre_sucursal = 'Almacén Angelopolis (por defecto)';
                         } else {
                             $id_sucursal = getSucursalIdPorNombre($conn, $nombre_sucursal, $sucursalCache);
                         }
@@ -200,8 +201,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'inser
 
         // sucursal
         if ($nombre_sucursal === '') {
-            $id_sucursal     = $idEulalia;
-            $nombre_sucursal = 'Eulalia (por defecto)';
+            $id_sucursal     = $idDefaultAlmacen;
+            $nombre_sucursal = 'Almacén Angelopolis (por defecto)';
         } else {
             $id_sucursal = getSucursalIdPorNombre($conn, $nombre_sucursal, $sucursalCache);
         }
@@ -276,7 +277,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'inser
             <h5>Subir Archivo CSV</h5>
             <p>
                 Columnas (en este orden): <b>iccid, dn, caja_id, sucursal, operador</b>.<br>
-                • Si <b>sucursal</b> está vacía, se asigna <b>Eulalia</b>.<br>
+                • Si <b>sucursal</b> está vacía, se asigna <b>Almacén Angelopolis</b>.<br>
                 • Si <b>operador</b> está vacío, se usa <b>Bait</b>. (Permitidos: Bait, AT&amp;T)
             </p>
             <form method="POST" enctype="multipart/form-data">

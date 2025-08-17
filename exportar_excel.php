@@ -7,21 +7,24 @@ if (!isset($_SESSION['id_usuario'])) {
 
 include 'db.php';
 
-// 📄 Configuración para exportar a Excel
+// 📄 Encabezados para exportar a Excel (HTML table)
 header("Content-Type: application/vnd.ms-excel; charset=UTF-8");
 header("Content-Disposition: attachment; filename=historial_ventas.xls");
 header("Pragma: no-cache");
 header("Expires: 0");
 
-echo "\xEF\xBB\xBF"; // BOM para UTF-8
+// BOM UTF-8
+echo "\xEF\xBB\xBF";
 
 $rolUsuario  = $_SESSION['rol'];
-$id_sucursal = $_SESSION['id_sucursal'];
+$id_sucursal = (int)($_SESSION['id_sucursal'] ?? 0);
 
-// 🔹 Calcular semana martes-lunes desde parámetro GET
+// =====================
+//   Semana martes-lunes
+// =====================
 function obtenerSemanaPorIndice($offset = 0) {
     $hoy = new DateTime();
-    $diaSemana = $hoy->format('N'); // lunes=1, domingo=7
+    $diaSemana = $hoy->format('N'); // 1=lun..7=dom
     $dif = $diaSemana - 2; // martes=2
     if ($dif < 0) $dif += 7;
 
@@ -43,13 +46,15 @@ list($fechaInicio, $fechaFin) = obtenerSemanaPorIndice($semanaSeleccionada);
 
 // =====================
 //   Filtros base
+//   (siempre solo Propias)
 // =====================
-$where  = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ? ";
-$params = [$fechaInicio, $fechaFin];
-$types  = "ss";
+$joinSuc = " INNER JOIN sucursales s ON s.id = v.id_sucursal ";
+$where   = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ? AND s.subtipo = 'Propia' ";
+$params  = [$fechaInicio, $fechaFin];
+$types   = "ss";
 
-// Si NO es admin, filtramos por sucursal
-if ($rolUsuario != 'Admin') {
+// Si NO es admin, restringe a su sucursal
+if ($rolUsuario !== 'Admin') {
     $where   .= " AND v.id_sucursal = ? ";
     $params[] = $id_sucursal;
     $types   .= "i";
@@ -58,15 +63,25 @@ if ($rolUsuario != 'Admin') {
 // Tipo de venta
 if (!empty($_GET['tipo_venta'])) {
     $where   .= " AND v.tipo_venta = ? ";
-    $params[] = $_GET['tipo_enta'] ?? $_GET['tipo_venta']; // tolerante
+    // tolerante a 'tipo_enta' por si llega mal el parámetro
+    $params[] = $_GET['tipo_enta'] ?? $_GET['tipo_venta'];
     $types   .= "s";
 }
 
-// Usuario (solo si no es Admin)
-if (!empty($_GET['usuario']) && $rolUsuario != 'Admin') {
+// Usuario (aplicable también para Admin para que coincida con la vista)
+if (!empty($_GET['usuario'])) {
     $where   .= " AND v.id_usuario = ? ";
-    $params[] = $_GET['usuario'];
+    $params[] = (int)$_GET['usuario'];
     $types   .= "i";
+}
+
+// Buscar (cliente, teléfono, TAG, IMEI)
+if (!empty($_GET['buscar'])) {
+    $where   .= " AND (v.nombre_cliente LIKE ? OR v.telefono_cliente LIKE ? OR v.tag LIKE ? 
+                   OR EXISTS (SELECT 1 FROM detalle_venta dv WHERE dv.id_venta=v.id AND dv.imei1 LIKE ?)) ";
+    $busqueda = "%".trim($_GET['buscar'])."%";
+    array_push($params, $busqueda, $busqueda, $busqueda, $busqueda);
+    $types   .= "ssss";
 }
 
 // =====================
@@ -78,8 +93,8 @@ $sqlVentas = "
            u.nombre AS usuario,
            s.nombre AS sucursal
     FROM ventas v
-    INNER JOIN usuarios u   ON v.id_usuario   = u.id
-    INNER JOIN sucursales s ON v.id_sucursal  = s.id
+    $joinSuc
+    INNER JOIN usuarios u   ON v.id_usuario  = u.id
     $where
     ORDER BY v.fecha_venta DESC
 ";
@@ -89,6 +104,7 @@ if (!empty($params)) {
 }
 $stmt->execute();
 $ventas = $stmt->get_result();
+$stmt->close();
 
 // =====================
 //   Consulta detalles
@@ -104,6 +120,7 @@ $detalles = [];
 while ($row = $detalleResult->fetch_assoc()) {
     $detalles[$row['id_venta']][] = $row;
 }
+$detalleResult->close();
 
 // =====================
 //   Generar Excel
@@ -133,40 +150,59 @@ echo "<thead>
       <tbody>";
 
 while ($venta = $ventas->fetch_assoc()) {
-    if (isset($detalles[$venta['id']])) {
-        foreach ($detalles[$venta['id']] as $equipo) {
+    $idVenta    = (int)$venta['id'];
+    $fechaVenta = htmlspecialchars($venta['fecha_venta'] ?? '', ENT_QUOTES, 'UTF-8');
+    $tag        = htmlspecialchars($venta['tag'] ?? '', ENT_QUOTES, 'UTF-8');
+    $cliente    = htmlspecialchars($venta['nombre_cliente'] ?? '', ENT_QUOTES, 'UTF-8');
+    $tel        = htmlspecialchars($venta['telefono_cliente'] ?? '', ENT_QUOTES, 'UTF-8');
+    $sucursal   = htmlspecialchars($venta['sucursal'] ?? '', ENT_QUOTES, 'UTF-8');
+    $usuario    = htmlspecialchars($venta['usuario'] ?? '', ENT_QUOTES, 'UTF-8');
+    $tipoVenta  = htmlspecialchars($venta['tipo_venta'] ?? '', ENT_QUOTES, 'UTF-8');
+    $precio     = (float)($venta['precio_venta'] ?? 0);
+    $comisionV  = (float)($venta['comision'] ?? 0);
+
+    if (isset($detalles[$idVenta])) {
+        foreach ($detalles[$idVenta] as $equipo) {
+            $marca   = htmlspecialchars($equipo['marca'] ?? '', ENT_QUOTES, 'UTF-8');
+            $modelo  = htmlspecialchars($equipo['modelo'] ?? '', ENT_QUOTES, 'UTF-8');
+            $color   = htmlspecialchars($equipo['color'] ?? '', ENT_QUOTES, 'UTF-8');
+            $imei    = $equipo['imei1'] ?? '';
+            $creg    = (float)($equipo['comision_regular'] ?? 0);
+            $cesp    = (float)($equipo['comision_especial'] ?? 0);
+            $ctot    = (float)($equipo['comision'] ?? 0);
+
             echo "<tr>
-                    <td>{$venta['id']}</td>
-                    <td>{$venta['fecha_venta']}</td>
-                    <td>{$venta['tag']}</td>
-                    <td>{$venta['nombre_cliente']}</td>
-                    <td>{$venta['telefono_cliente']}</td>
-                    <td>{$venta['sucursal']}</td>
-                    <td>{$venta['usuario']}</td>
-                    <td>{$venta['tipo_venta']}</td>
-                    <td>{$venta['precio_venta']}</td>
-                    <td>{$venta['comision']}</td>
-                    <td>{$equipo['marca']}</td>
-                    <td>{$equipo['modelo']}</td>
-                    <td>{$equipo['color']}</td>
-                    <td>=\"{$equipo['imei1']}\"</td>
-                    <td>{$equipo['comision_regular']}</td>
-                    <td>{$equipo['comision_especial']}</td>
-                    <td>{$equipo['comision']}</td>
+                    <td>{$idVenta}</td>
+                    <td>{$fechaVenta}</td>
+                    <td>{$tag}</td>
+                    <td>{$cliente}</td>
+                    <td>{$tel}</td>
+                    <td>{$sucursal}</td>
+                    <td>{$usuario}</td>
+                    <td>{$tipoVenta}</td>
+                    <td>{$precio}</td>
+                    <td>{$comisionV}</td>
+                    <td>{$marca}</td>
+                    <td>{$modelo}</td>
+                    <td>{$color}</td>
+                    <td>=\"".htmlspecialchars($imei, ENT_QUOTES, 'UTF-8')."\"</td>
+                    <td>{$creg}</td>
+                    <td>{$cesp}</td>
+                    <td>{$ctot}</td>
                   </tr>";
         }
     } else {
         echo "<tr>
-                <td>{$venta['id']}</td>
-                <td>{$venta['fecha_venta']}</td>
-                <td>{$venta['tag']}</td>
-                <td>{$venta['nombre_cliente']}</td>
-                <td>{$venta['telefono_cliente']}</td>
-                <td>{$venta['sucursal']}</td>
-                <td>{$venta['usuario']}</td>
-                <td>{$venta['tipo_venta']}</td>
-                <td>{$venta['precio_venta']}</td>
-                <td>{$venta['comision']}</td>
+                <td>{$idVenta}</td>
+                <td>{$fechaVenta}</td>
+                <td>{$tag}</td>
+                <td>{$cliente}</td>
+                <td>{$tel}</td>
+                <td>{$sucursal}</td>
+                <td>{$usuario}</td>
+                <td>{$tipoVenta}</td>
+                <td>{$precio}</td>
+                <td>{$comisionV}</td>
                 <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
               </tr>";
     }
@@ -174,4 +210,3 @@ while ($venta = $ventas->fetch_assoc()) {
 
 echo "</tbody></table>";
 exit;
-?>
