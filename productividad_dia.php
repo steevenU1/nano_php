@@ -24,12 +24,10 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) $fecha = $ayerLocal;
 
 /* ==========================================================
    🔹 GLOBALES (SOLO PROPIAS): tickets, ventas$, unidades
-   Nota: filtramos por s.subtipo='Propia'
 ========================================================== */
 $sqlGlobal = "
   SELECT
     COUNT(DISTINCT v.id) AS tickets,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -37,7 +35,6 @@ $sqlGlobal = "
         ELSE dv.precio_unitario
       END
     ),0) AS ventas_validas,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -49,7 +46,6 @@ $sqlGlobal = "
         ELSE 1
       END
     ),0) AS unidades_validas
-
   FROM ventas v
   INNER JOIN sucursales s ON s.id = v.id_sucursal
   LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
@@ -71,7 +67,6 @@ $ticketProm      = $tickets > 0 ? ($ventasValidas / $tickets) : 0.0;
 
 /* ==========================================================
    🔹 Cuota diaria GLOBAL (u.) — SOLO PROPIAS
-   = SUM_suc (cuota_unidades_sem * #ejecutivos_activos) / diasProductivos
 ========================================================== */
 $sqlCuotaDiariaGlobalU = "
   SELECT IFNULL(SUM(cuota_calc),0) AS cuota_diaria_global_u FROM (
@@ -101,7 +96,6 @@ $stmt->bind_param("si", $fecha, $diasProductivos);
 $stmt->execute();
 $cdgU = $stmt->get_result()->fetch_assoc();
 $stmt->close();
-
 $cuotaDiariaGlobalU = (float)($cdgU['cuota_diaria_global_u'] ?? 0);
 
 /* ==========================================================
@@ -127,20 +121,17 @@ $stmt->bind_param("si", $fecha, $diasProductivos);
 $stmt->execute();
 $cdgM = $stmt->get_result()->fetch_assoc();
 $stmt->close();
-
 $cuotaDiariaGlobalM = (float)($cdgM['cuota_diaria_global_monto'] ?? 0);
 $cumplGlobalM = $cuotaDiariaGlobalM > 0 ? ($ventasValidas / $cuotaDiariaGlobalM) * 100 : 0;
 
 /* ==========================================================
    🔹 RANKING EJECUTIVOS — SOLO PROPIAS
-   Cuota diaria por EJECUTIVO (u.) = cuota_unidades_sucursal / diasProductivos
 ========================================================== */
 $sqlEjecutivos = "
   SELECT
     u.id,
     u.nombre,
     s.nombre AS sucursal,
-
     IFNULL((
       SELECT css.cuota_unidades
       FROM cuotas_semanales_sucursal css
@@ -149,14 +140,12 @@ $sqlEjecutivos = "
       ORDER BY css.semana_inicio DESC
       LIMIT 1
     ) / ?, 0) AS cuota_diaria_ejecutivo,
-
     (
       SELECT COUNT(DISTINCT v2.id)
       FROM ventas v2
       WHERE v2.id_usuario = u.id
         AND DATE(CONVERT_TZ(v2.fecha_venta,'+00:00', ? )) = ?
     ) AS tickets,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -164,7 +153,6 @@ $sqlEjecutivos = "
         ELSE dv.precio_unitario
       END
     ),0) AS ventas_validas,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -176,7 +164,6 @@ $sqlEjecutivos = "
         ELSE 1
       END
     ),0) AS unidades_validas
-
   FROM usuarios u
   INNER JOIN sucursales s ON s.id = u.id_sucursal
   LEFT JOIN ventas v 
@@ -205,14 +192,13 @@ while ($r = $resEj->fetch_assoc()) {
 $stmt->close();
 
 /* ==========================================================
-   🔹 RANKING SUCURSALES (Propias) — Monto
+   🔹 RANKING SUCURSALES (Propias) — Monto (con subtipo)
 ========================================================== */
-$sqlSucursales = "
+$sqlSucursalesPropias = "
   SELECT
     s.id AS id_sucursal,
     s.nombre AS sucursal,
-    s.zona,
-
+    s.subtipo AS subtipo,
     IFNULL((
       SELECT cs.cuota_monto
       FROM cuotas_sucursales cs
@@ -221,7 +207,6 @@ $sqlSucursales = "
       ORDER BY cs.fecha_inicio DESC
       LIMIT 1
     ) / ?, 0) AS cuota_diaria_monto,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -229,7 +214,6 @@ $sqlSucursales = "
         ELSE dv.precio_unitario
       END
     ),0) AS ventas_validas,
-
     IFNULL(SUM(
       CASE
         WHEN dv.id IS NULL THEN 0
@@ -241,7 +225,6 @@ $sqlSucursales = "
         ELSE 1
       END
     ),0) AS unidades_validas
-
   FROM sucursales s
   LEFT JOIN (
     SELECT v1.*
@@ -254,7 +237,7 @@ $sqlSucursales = "
   GROUP BY s.id
   ORDER BY ventas_validas DESC
 ";
-$stmt = $conn->prepare($sqlSucursales);
+$stmt = $conn->prepare($sqlSucursalesPropias);
 $stmt->bind_param("siss", $fecha, $diasProductivos, $tzOffset, $fecha);
 $stmt->execute();
 $resSuc = $stmt->get_result();
@@ -270,20 +253,47 @@ while ($s = $resSuc->fetch_assoc()) {
 $stmt->close();
 
 /* ==========================================================
-   🔹 RANKING SUCURSALES (Master Admin) — Monto
-   (misma lógica, cambiando s.subtipo='Master Admin')
+   🔹 RANKING SUCURSALES (Master Admin) — SIN cuota/cumplimiento
+   ✅ Conteo correcto:
+      - Unidades: CASE con NULL → 0, Fin=1, Contado=1, F+Combo=2
+      - Ventas $: SUM(v.precio_venta)
 ========================================================== */
-$stmt = $conn->prepare(str_replace("s.subtipo='Propia'", "s.subtipo='Master Admin'", $sqlSucursales));
-$stmt->bind_param("siss", $fecha, $diasProductivos, $tzOffset, $fecha);
+$sqlSucursalesMA = "
+  SELECT
+    s.id        AS id_sucursal,
+    s.nombre    AS sucursal,
+    s.subtipo   AS subtipo,
+    IFNULL(SUM(
+      CASE 
+        WHEN v_ma.id IS NULL THEN 0
+        WHEN v_ma.tipo_venta = 'Financiamiento+Combo' THEN 2
+        ELSE 1
+      END
+    ),0)                                         AS unidades_validas,
+    IFNULL(SUM(v_ma.precio_venta),0)             AS ventas_validas
+  FROM sucursales s
+  LEFT JOIN (
+    SELECT v1.*
+    FROM ventas v1
+    WHERE DATE(CONVERT_TZ(v1.fecha_venta,'+00:00', ? )) = ?
+  ) v_ma ON v_ma.id_sucursal = s.id
+  WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
+  GROUP BY s.id
+  ORDER BY ventas_validas DESC
+";
+$stmt = $conn->prepare($sqlSucursalesMA);
+$stmt->bind_param("ss", $tzOffset, $fecha);
 $stmt->execute();
 $resSucMA = $stmt->get_result();
 
 $sucursalesMA = [];
+$totMAUnidades = 0;
+$totMAVentas   = 0.0;
 while ($s = $resSucMA->fetch_assoc()) {
-    $s['cuota_diaria_monto'] = (float)$s['cuota_diaria_monto'];
-    $s['ventas_validas']     = (float)$s['ventas_validas'];
-    $s['unidades_validas']   = (int)$s['unidades_validas'];
-    $s['cumplimiento_monto'] = $s['cuota_diaria_monto']>0 ? ($s['ventas_validas'] / $s['cuota_diaria_monto'] * 100) : 0;
+    $s['unidades_validas'] = (int)$s['unidades_validas'];
+    $s['ventas_validas']   = (float)$s['ventas_validas'];
+    $totMAUnidades += $s['unidades_validas'];
+    $totMAVentas   += $s['ventas_validas'];
     $sucursalesMA[] = $s;
 }
 $stmt->close();
@@ -451,7 +461,7 @@ require_once __DIR__ . '/navbar.php';
             <thead class="table-dark">
               <tr>
                 <th>Sucursal</th>
-                <th>Zona</th>
+                <th>Subtipo</th>
                 <th>Unidades</th>
                 <th>Ventas $</th>
                 <th>Cuota diaria ($)</th>
@@ -467,7 +477,7 @@ require_once __DIR__ . '/navbar.php';
               ?>
               <tr class="<?= $fila ?>">
                 <td><?= h($s['sucursal']) ?></td>
-                <td>Zona <?= h($s['zona']) ?></td>
+                <td><?= h($s['subtipo']) ?></td>
                 <td><?= (int)$s['unidades_validas'] ?></td>
                 <td>$<?= number_format($s['ventas_validas'],2) ?></td>
                 <td>$<?= number_format($s['cuota_diaria_monto'],2) ?></td>
@@ -494,35 +504,28 @@ require_once __DIR__ . '/navbar.php';
             <thead class="table-dark">
               <tr>
                 <th>Sucursal</th>
-                <th>Zona</th>
+                <th>Subtipo</th>
                 <th>Unidades</th>
                 <th>Ventas $</th>
-                <th>Cuota diaria ($)</th>
-                <th>% Cumplimiento (monto)</th>
-                <th>Progreso</th>
               </tr>
             </thead>
             <tbody>
-              <?php foreach ($sucursalesMA as $s):
-                $cumpl = $s['cumplimiento_monto'];
-                $fila = $cumpl>=100?'table-success':($cumpl>=60?'table-warning':'table-danger');
-                $cls  = $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger');
-              ?>
-              <tr class="<?= $fila ?>">
+              <?php foreach ($sucursalesMA as $s): ?>
+              <tr>
                 <td><?= h($s['sucursal']) ?></td>
-                <td>Zona <?= h($s['zona']) ?></td>
+                <td><?= h($s['subtipo']) ?></td>
                 <td><?= (int)$s['unidades_validas'] ?></td>
                 <td>$<?= number_format($s['ventas_validas'],2) ?></td>
-                <td>$<?= number_format($s['cuota_diaria_monto'],2) ?></td>
-                <td><?= number_format($cumpl,1) ?>%</td>
-                <td>
-                  <div class="progress" style="height:20px">
-                    <div class="progress-bar <?= $cls ?>" style="width:<?= min(100,$cumpl) ?>%"></div>
-                  </div>
-                </td>
               </tr>
               <?php endforeach;?>
             </tbody>
+            <tfoot>
+              <tr class="table-dark">
+                <th colspan="2" class="text-end">Totales:</th>
+                <th><?= (int)$totMAUnidades ?></th>
+                <th>$<?= number_format($totMAVentas,2) ?></th>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
