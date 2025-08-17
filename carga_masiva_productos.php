@@ -1,5 +1,7 @@
 <?php
-// carga_masiva_productos.php
+// carga_masiva_productos.php (Nano)
+// Reglas Nano: si la Sucursal viene vacía, asignar por defecto "Almacen Angelopolis"
+
 session_start();
 if (!isset($_SESSION['id_usuario']) || $_SESSION['rol'] != 'Admin') {
     header("Location: 403.php");
@@ -19,6 +21,8 @@ $previewData = [];
 $reportLink = '';
 $insertadas = 0;
 $ignoradas  = 0;
+
+define('DEFAULT_SUCURSAL_NANO', 'Almacen Angelopolis');
 
 /*
 CSV ESPERADO (13 columnas):
@@ -84,6 +88,18 @@ function normalizaFechaISO($s) {
     return null;
 }
 
+/** Obtiene el id de sucursal por nombre (o null si no existe). */
+function getSucursalIdByName(mysqli $conn, string $nombre): ?int {
+    $nombre = trim($nombre);
+    if ($nombre === '') return null;
+    $stmt = $conn->prepare("SELECT id FROM sucursales WHERE nombre=? LIMIT 1");
+    $stmt->bind_param("s", $nombre);
+    $stmt->execute();
+    $res = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return $res['id'] ?? null;
+}
+
 // ============================================
 // 🔹 Paso 1: Vista previa del CSV
 // ============================================
@@ -131,16 +147,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'previ
                 $tipo_producto = 'Equipo';
             }
 
-            // Buscar ID de sucursal
-            $idSucursal = null;
-            if ($sucursal_nombre) {
-                $stmtSuc = $conn->prepare("SELECT id FROM sucursales WHERE nombre=? LIMIT 1");
-                $stmtSuc->bind_param("s", $sucursal_nombre);
-                $stmtSuc->execute();
-                $resSuc = $stmtSuc->get_result()->fetch_assoc();
-                $idSucursal = $resSuc['id'] ?? null;
-                $stmtSuc->close();
+            // 🔹 Ajuste Nano: si sucursal está vacía -> Almacen Angelopolis
+            if ($sucursal_nombre === '') {
+                $sucursal_nombre = DEFAULT_SUCURSAL_NANO;
             }
+
+            // Resolver id de sucursal
+            $idSucursal = getSucursalIdByName($conn, $sucursal_nombre);
 
             $estatus = 'OK';
             $motivo  = 'Listo para insertar';
@@ -218,11 +231,35 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'inser
     $output = fopen($reportPath, 'w');
     fputcsv($output, ['codigo_producto','marca','modelo','color','capacidad','imei1','imei2','sucursal','proveedor','estatus_final','motivo']);
 
+    // Cache simple para no consultar la misma sucursal muchas veces
+    $sucursalCache = [];
+
     foreach ($data as $prod) {
         $estatusFinal = $prod['estatus'];
         $motivo = $prod['motivo'];
 
-        if ($prod['estatus'] === 'OK') {
+        // 🔒 Re-resolver id_sucursal por si viene null/0, forzando default Nano
+        $sucursalNombre = trim((string)($prod['sucursal'] ?? ''));
+        if ($sucursalNombre === '') {
+            $sucursalNombre = DEFAULT_SUCURSAL_NANO;
+        }
+
+        // Resolver id desde cache o DB
+        $idSucursal = (int)($prod['id_sucursal'] ?? 0);
+        if ($idSucursal <= 0) {
+            if (!isset($sucursalCache[$sucursalNombre])) {
+                $sucursalCache[$sucursalNombre] = getSucursalIdByName($conn, $sucursalNombre);
+            }
+            $idSucursal = (int)($sucursalCache[$sucursalNombre] ?? 0);
+        }
+
+        if ($prod['estatus'] === 'OK' && $idSucursal <= 0) {
+            // Si en esta fase sigue sin encontrarse la sucursal, no insertamos
+            $estatusFinal = 'Ignorada';
+            $motivo = 'Sucursal no encontrada (insert)';
+        }
+
+        if ($prod['estatus'] === 'OK' && $idSucursal > 0) {
             $proveedor = isset($prod['proveedor']) && $prod['proveedor'] !== '' ? $prod['proveedor'] : null;
 
             // Inserta en productos (incluye codigo_producto)
@@ -242,9 +279,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'inser
                 if ($stmt->execute()) {
                     $idProducto = $stmt->insert_id;
 
-                    // Nota: fecha_ingreso ya viene normalizada como YYYY-MM-DD
+                    // fecha_ingreso ya viene normalizada como YYYY-MM-DD
+                    $fechaIngreso = $prod['fecha_ingreso'] ?: date('Y-m-d');
+
                     $stmtInv = $conn->prepare("INSERT INTO inventario (id_producto, id_sucursal, estatus, fecha_ingreso) VALUES (?, ?, 'Disponible', ?)");
-                    $stmtInv->bind_param("iis", $idProducto, $prod['id_sucursal'], $prod['fecha_ingreso']);
+                    $stmtInv->bind_param("iis", $idProducto, $idSucursal, $fechaIngreso);
                     $stmtInv->execute();
                     $stmtInv->close();
 
@@ -279,7 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'inser
             $prod['capacidad'],
             $prod['imei1'],
             $prod['imei2'],
-            $prod['sucursal'],
+            $sucursalNombre,
             $prod['proveedor'] ?? '',
             $estatusFinal,
             $motivo
@@ -289,8 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'inser
     fclose($output);
 
     $alertType = 'success';
-    $msg = "✅ Carga completada. <b>$insertadas</b> insertadas, <b>$ignoradas</b> ignoradas. "
-         . "Descarga el reporte para detalles.";
+    $msg = "✅ Carga completada. <b>$insertadas</b> insertadas, <b>$ignoradas</b> ignoradas. Descarga el reporte para detalles.";
     $reportLink = 'tmp/' . $reportFile;
 }
 ?>

@@ -32,12 +32,14 @@ $inicioSemana = $inicioObj->format('Y-m-d');
 $finSemana    = $finObj->format('Y-m-d');
 
 /* ==============================
-   Dashboard Ejecutivos (semanal)
-   (sin cambios funcionales)
+   Ejecutivos (solo Propias)
+   * Mostrar columna Subtipo
 ================================= */
 $sqlEjecutivos = "
     SELECT 
-        u.id, u.nombre, u.rol, s.nombre AS sucursal,
+        u.id, u.nombre, u.rol,
+        s.nombre AS sucursal,
+        s.subtipo AS subtipo,
         (
             SELECT ec.cuota_ejecutivo
             FROM esquemas_comisiones ec
@@ -51,7 +53,7 @@ $sqlEjecutivos = "
             CASE 
                 WHEN dv.id IS NULL THEN 0
                 WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                WHEN v.tipo_venta='Financiamiento+Combo' 
+                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
                      AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id)
                      THEN 2
                 ELSE 1
@@ -65,7 +67,7 @@ $sqlEjecutivos = "
         AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
     LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
     LEFT JOIN productos p ON p.id = dv.id_producto
-    WHERE s.tipo_sucursal='Tienda' AND u.activo = 1
+    WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia' AND u.activo = 1
     GROUP BY u.id
     ORDER BY unidades DESC, total_ventas DESC
 ";
@@ -85,10 +87,12 @@ while ($row = $resEjecutivos->fetch_assoc()) {
 $top3Ejecutivos = array_slice(array_column($rankingEjecutivos, 'id'), 0, 3);
 
 /* ==============================
-   Dashboard Sucursales (Propias)
+   Sucursales (Propias)
 ================================= */
 $sqlSucursalesPropias = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal, s.zona,
+    SELECT s.id AS id_sucursal,
+           s.nombre AS sucursal,
+           s.subtipo AS subtipo,
            (
                SELECT cs.cuota_monto
                FROM cuotas_sucursales cs
@@ -99,7 +103,7 @@ $sqlSucursalesPropias = "
                 CASE 
                     WHEN dv.id IS NULL THEN 0
                     WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                    WHEN v.tipo_venta='Financiamiento+Combo' 
+                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
                          AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id)
                          THEN 2
                     ELSE 1
@@ -124,9 +128,9 @@ $stmt2->execute();
 $resSucursalesPropias = $stmt2->get_result();
 
 $sucursales = [];
-$totalUnidades = 0;
-$totalVentasGlobal = 0;
-$totalCuotaGlobal = 0;
+$totalUnidadesPropias = 0;
+$totalVentasPropias   = 0;
+$totalCuotaPropias    = 0;
 
 while ($row = $resSucursalesPropias->fetch_assoc()) {
     $row['unidades']      = (int)$row['unidades'];
@@ -134,80 +138,89 @@ while ($row = $resSucursalesPropias->fetch_assoc()) {
     $row['cuota_semanal'] = (float)$row['cuota_semanal'];
     $row['cumplimiento']  = $row['cuota_semanal']>0 ? ($row['total_ventas']/$row['cuota_semanal']*100) : 0;
 
-    $sucursales[] = $row;
-    $totalUnidades      += $row['unidades'];
-    $totalVentasGlobal  += $row['total_ventas'];
-    $totalCuotaGlobal   += $row['cuota_semanal'];
+    $sucursales[]          = $row;
+    $totalUnidadesPropias += $row['unidades'];
+    $totalVentasPropias   += $row['total_ventas'];
+    $totalCuotaPropias    += $row['cuota_semanal'];
 }
-$porcentajeGlobal = $totalCuotaGlobal>0 ? ($totalVentasGlobal/$totalCuotaGlobal)*100 : 0;
+$porcentajeGlobalPropias = $totalCuotaPropias>0 ? ($totalVentasPropias/$totalCuotaPropias)*100 : 0;
 
 /* ==============================
-   Dashboard Sucursales (Master Admin)
+   Sucursales (Master Admin) — SIN cuota
 ================================= */
 $sqlSucursalesMA = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal, s.zona,
-           (
-               SELECT cs.cuota_monto
-               FROM cuotas_sucursales cs
-               WHERE cs.id_sucursal = s.id AND cs.fecha_inicio <= ?
-               ORDER BY cs.fecha_inicio DESC LIMIT 1
-           ) AS cuota_semanal,
-           IFNULL(SUM(
-                CASE 
-                    WHEN dv.id IS NULL THEN 0
-                    WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                    WHEN v.tipo_venta='Financiamiento+Combo' 
-                         AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id)
-                         THEN 2
-                    ELSE 1
-                END
-           ),0) AS unidades,
-           IFNULL(SUM(CASE WHEN dv.id IS NULL OR LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0 ELSE dv.precio_unitario END),0) AS total_ventas
+    SELECT 
+        s.id AS id_sucursal,
+        s.nombre AS sucursal,
+        s.subtipo AS subtipo,
+
+        -- Unidades
+        IFNULL(SUM(
+            CASE 
+                WHEN v.id IS NULL THEN 0
+                WHEN v.origen_ma='nano' THEN
+                    CASE 
+                        WHEN dv.id IS NULL THEN 
+                            CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                        WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN
+                            CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                        ELSE 0
+                    END
+                ELSE
+                    CASE 
+                        WHEN dv.id IS NULL THEN 0
+                        WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                        ELSE 1
+                    END
+            END
+        ),0) AS unidades,
+
+        -- Monto
+        IFNULL(SUM(
+            CASE 
+                WHEN v.id IS NULL THEN 0
+                WHEN v.origen_ma='nano' THEN
+                    CASE 
+                        WHEN dv.id IS NULL THEN IFNULL(v.precio_venta,0)
+                        WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id) THEN IFNULL(v.precio_venta,0)
+                        ELSE 0
+                    END
+                ELSE
+                    CASE 
+                        WHEN dv.id IS NULL OR LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                        ELSE IFNULL(dv.precio_unitario,0)
+                    END
+            END
+        ),0) AS total_ventas
+
     FROM sucursales s
-    LEFT JOIN (
-        SELECT v.id, v.id_sucursal, v.fecha_venta, v.tipo_venta
-        FROM ventas v
-        WHERE DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-    ) v ON v.id_sucursal = s.id
+    LEFT JOIN ventas v
+           ON v.id_sucursal = s.id
+          AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
     LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-    LEFT JOIN productos p ON p.id = dv.id_producto
+    LEFT JOIN productos p      ON p.id       = dv.id_producto
     WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
     GROUP BY s.id
     ORDER BY total_ventas DESC
 ";
 $stmtMA = $conn->prepare($sqlSucursalesMA);
-$stmtMA->bind_param("sss", $inicioSemana, $inicioSemana, $finSemana);
+$stmtMA->bind_param("ss", $inicioSemana, $finSemana);
 $stmtMA->execute();
 $resSucursalesMA = $stmtMA->get_result();
 
 $sucursalesMA = [];
+$totalUnidadesMA = 0;
+$totalVentasMA   = 0;
 while ($row = $resSucursalesMA->fetch_assoc()) {
     $row['unidades']      = (int)$row['unidades'];
     $row['total_ventas']  = (float)$row['total_ventas'];
-    $row['cuota_semanal'] = (float)$row['cuota_semanal'];
-    $row['cumplimiento']  = $row['cuota_semanal']>0 ? ($row['total_ventas']/$row['cuota_semanal']*100) : 0;
-    $sucursalesMA[] = $row;
+    $sucursalesMA[]       = $row;
+    $totalUnidadesMA     += $row['unidades'];
+    $totalVentasMA       += $row['total_ventas'];
 }
-
-/* ==============================
-   Agrupación por Zonas (Propias)
-================================= */
-$zonas = [];
-foreach ($sucursales as $s) {
-    $z = $s['zona'];
-    if (!isset($zonas[$z])) $zonas[$z] = ['unidades'=>0,'ventas'=>0,'cuota'=>0];
-    $zonas[$z]['unidades'] += $s['unidades'];
-    $zonas[$z]['ventas']   += $s['total_ventas'];
-    $zonas[$z]['cuota']    += $s['cuota_semanal'];
-}
-foreach ($zonas as $z => &$info) {
-    $info['cumplimiento'] = $info['cuota']>0 ? ($info['ventas']/$info['cuota']*100) : 0;
-}
-unset($info);
 
 /* ==========================================================
-   📈 Serie SEMANAL (diaria mar–lun) por sucursal — TODAS
-   (Se deja igual que antes)
+   Serie semanal (mar–lun) por sucursal — TODAS
 ========================================================== */
 $labelsSemanaISO = [];
 $labelsSemanaVis = [];
@@ -225,7 +238,7 @@ SELECT s.nombre AS sucursal,
        SUM(CASE 
              WHEN dv.id IS NULL THEN 0
              WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-             WHEN v.tipo_venta='Financiamiento+Combo' 
+             WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
                   AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
                   THEN 2
              ELSE 1
@@ -298,43 +311,58 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
         </select>
     </form>
 
-    <!-- Tarjetas de Zonas y Global (solo Propias) -->
+    <!-- Tarjetas: Propias | Master Admin | Global (Propias) -->
     <div class="row mb-4">
-        <?php foreach ($zonas as $zona => $info): ?>
-            <div class="col-md-4 mb-3">
-                <div class="card shadow text-center">
-                    <div class="card-header bg-dark text-white">Zona <?= $zona ?></div>
-                    <div class="card-body">
-                        <h5><?= number_format($info['cumplimiento'],1) ?>% Cumplimiento</h5>
-                        <p>
-                            Unidades: <?= $info['unidades'] ?><br>
-                            Ventas: $<?= number_format($info['ventas'],2) ?><br>
-                            Cuota: $<?= number_format($info['cuota'],2) ?>
-                        </p>
-                        <div class="progress" style="height:20px">
-                            <div class="progress-bar <?= $info['cumplimiento']>=100?'bg-success':($info['cumplimiento']>=60?'bg-warning':'bg-danger') ?>"
-                                 style="width:<?= min(100,$info['cumplimiento']) ?>%">
-                                <?= number_format(min(100,$info['cumplimiento']),1) ?>%
-                            </div>
+        <!-- Propias -->
+        <div class="col-md-4 mb-3">
+            <div class="card shadow text-center">
+                <div class="card-header bg-dark text-white">Propias</div>
+                <div class="card-body">
+                    <h5><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
+                    <p class="mb-2">
+                        Unidades: <?= $totalUnidadesPropias ?><br>
+                        Ventas: $<?= number_format($totalVentasPropias,2) ?><br>
+                        Cuota: $<?= number_format($totalCuotaPropias,2) ?>
+                    </p>
+                    <div class="progress" style="height:20px">
+                        <div class="progress-bar <?= $porcentajeGlobalPropias>=100?'bg-success':($porcentajeGlobalPropias>=60?'bg-warning':'bg-danger') ?>"
+                             style="width:<?= min(100,$porcentajeGlobalPropias) ?>%">
+                            <?= number_format(min(100,$porcentajeGlobalPropias),1) ?>%
                         </div>
                     </div>
                 </div>
             </div>
-        <?php endforeach; ?>
+        </div>
+
+        <!-- Master Admin -->
         <div class="col-md-4 mb-3">
             <div class="card shadow text-center">
-                <div class="card-header bg-primary text-white">Global Compañía (Propias)</div>
+                <div class="card-header bg-secondary text-white">Master Admin</div>
                 <div class="card-body">
-                    <h5><?= number_format($porcentajeGlobal,1) ?>% Cumplimiento</h5>
-                    <p>
-                        Unidades: <?= $totalUnidades ?><br>
-                        Ventas: $<?= number_format($totalVentasGlobal,2) ?><br>
-                        Cuota: $<?= number_format($totalCuotaGlobal,2) ?>
+                    <h5>Sin cuota</h5>
+                    <p class="mb-0">
+                        Unidades: <?= $totalUnidadesMA ?><br>
+                        Ventas: $<?= number_format($totalVentasMA,2) ?>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global (Propias) -->
+        <div class="col-md-4 mb-3">
+            <div class="card shadow text-center">
+                <div class="card-header bg-primary text-white">🌐 Global (Propias)</div>
+                <div class="card-body">
+                    <h5><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
+                    <p class="mb-2">
+                        Unidades: <?= $totalUnidadesPropias ?><br>
+                        Ventas: $<?= number_format($totalVentasPropias,2) ?><br>
+                        Cuota: $<?= number_format($totalCuotaPropias,2) ?>
                     </p>
                     <div class="progress" style="height:20px">
-                        <div class="progress-bar <?= $porcentajeGlobal>=100?'bg-success':($porcentajeGlobal>=60?'bg-warning':'bg-danger') ?>"
-                             style="width:<?= min(100,$porcentajeGlobal) ?>%">
-                            <?= number_format(min(100,$porcentajeGlobal),1) ?>%
+                        <div class="progress-bar <?= $porcentajeGlobalPropias>=100?'bg-success':($porcentajeGlobalPropias>=60?'bg-warning':'bg-danger') ?>"
+                             style="width:<?= min(100,$porcentajeGlobalPropias) ?>%">
+                            <?= number_format(min(100,$porcentajeGlobalPropias),1) ?>%
                         </div>
                     </div>
                 </div>
@@ -342,7 +370,7 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
         </div>
     </div>
 
-    <!-- 👇 Gráfica semanal (todas las sucursales) -->
+    <!-- Gráfica semanal -->
     <div class="card shadow mb-4">
         <div class="card-header bg-dark text-white">Comportamiento Semanal por Sucursal (mar–lun)</div>
         <div class="card-body">
@@ -356,42 +384,46 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
     <!-- Tabs -->
     <ul class="nav nav-tabs mb-3" id="dashboardTabs">
         <li class="nav-item">
-            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#ejecutivos">Ejecutivos 👔</button>
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#sucursales">Sucursales (Propias)</button>
         </li>
         <li class="nav-item">
-            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#sucursales">Sucursales 🏢</button>
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#ejecutivos">Ejecutivos</button>
         </li>
         <li class="nav-item">
-            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#masteradmin">Master Admin 🏬</button>
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#masteradmin">Master Admin</button>
         </li>
     </ul>
 
     <div class="tab-content">
-        <!-- Ejecutivos -->
-        <div class="tab-pane fade show active" id="ejecutivos">
+        <!-- Sucursales (Propias) -->
+        <div class="tab-pane fade show active" id="sucursales">
             <div class="card mb-4 shadow">
-                <div class="card-header bg-dark text-white">Ranking de Ejecutivos</div>
+                <div class="card-header bg-dark text-white">Sucursales (Propias)</div>
                 <div class="card-body">
                     <table class="table table-striped table-bordered">
                         <thead class="table-dark">
                             <tr>
-                                <th>Ejecutivo</th><th>Sucursal</th><th>Unidades</th>
-                                <th>Total Ventas ($)</th><th>% Cumplimiento</th><th>Progreso</th>
+                                <th>Sucursal</th>
+                                <th>Tipo</th>
+                                <th>Unidades</th>
+                                <th>Cuota $</th>
+                                <th>Ventas $</th>
+                                <th>% Cumplimiento</th>
+                                <th>Progreso</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($rankingEjecutivos as $r):
-                                $cumpl = round($r['cumplimiento'],1);
+                            <?php foreach ($sucursales as $s):
+                                $cumpl = round($s['cumplimiento'],1);
                                 $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
                                 $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
-                                $iconTop = in_array($r['id'],$top3Ejecutivos) ? ' 🏆' : '';
-                                $iconCrown = ($cumpl >= 100) ? ' 👑' : '';
                             ?>
                             <tr class="<?= $fila ?>">
-                                <td><?= $r['nombre'].$iconTop.$iconCrown ?></td>
-                                <td><?= $r['sucursal'] ?></td>
-                                <td><?= $r['unidades'] ?></td>
-                                <td>$<?= number_format($r['total_ventas'],2) ?></td>
+                                <td><?= htmlspecialchars($s['sucursal']) ?></td>
+                                <td><?= htmlspecialchars($s['subtipo']) ?></td>
+                                <td><?= (int)$s['unidades'] ?></td>
+                                <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
+                                <td>$<?= number_format($s['total_ventas'],2) ?></td>
                                 <td><?= $cumpl ?>% <?= $estado ?></td>
                                 <td>
                                     <div class="progress" style="height:20px">
@@ -407,30 +439,37 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
             </div>
         </div>
 
-        <!-- Sucursales (Propias) -->
-        <div class="tab-pane fade" id="sucursales">
+        <!-- Ejecutivos -->
+        <div class="tab-pane fade" id="ejecutivos">
             <div class="card mb-4 shadow">
-                <div class="card-header bg-dark text-white">Ranking de Sucursales (Propias)</div>
+                <div class="card-header bg-dark text-white">Ejecutivos (Propias)</div>
                 <div class="card-body">
                     <table class="table table-striped table-bordered">
                         <thead class="table-dark">
                             <tr>
-                                <th>Sucursal</th><th>Zona</th><th>Unidades</th>
-                                <th>Cuota ($)</th><th>Total Ventas ($)</th><th>% Cumplimiento</th><th>Progreso</th>
+                                <th>Ejecutivo</th>
+                                <th>Sucursal</th>
+                                <th>Tipo</th>
+                                <th>Unidades</th>
+                                <th>Ventas $</th>
+                                <th>% Cumplimiento</th>
+                                <th>Progreso</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($sucursales as $s):
-                                $cumpl = round($s['cumplimiento'],1);
+                            <?php foreach ($rankingEjecutivos as $r):
+                                $cumpl = round($r['cumplimiento'],1);
                                 $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
                                 $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
+                                $iconTop = in_array($r['id'],$top3Ejecutivos) ? ' 🏆' : '';
+                                $iconCrown = ($cumpl >= 100) ? ' 👑' : '';
                             ?>
                             <tr class="<?= $fila ?>">
-                                <td><?= $s['sucursal'] ?></td>
-                                <td>Zona <?= $s['zona'] ?></td>
-                                <td><?= $s['unidades'] ?></td>
-                                <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
-                                <td>$<?= number_format($s['total_ventas'],2) ?></td>
+                                <td><?= htmlspecialchars($r['nombre']).$iconTop.$iconCrown ?></td>
+                                <td><?= htmlspecialchars($r['sucursal']) ?></td>
+                                <td><?= htmlspecialchars($r['subtipo']) ?></td>
+                                <td><?= (int)$r['unidades'] ?></td>
+                                <td>$<?= number_format($r['total_ventas'],2) ?></td>
                                 <td><?= $cumpl ?>% <?= $estado ?></td>
                                 <td>
                                     <div class="progress" style="height:20px">
@@ -449,34 +488,24 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
         <!-- Master Admin -->
         <div class="tab-pane fade" id="masteradmin">
             <div class="card mb-4 shadow">
-                <div class="card-header bg-dark text-white">Ranking de Sucursales (Master Admin)</div>
+                <div class="card-header bg-dark text-white">Master Admin (sin cuota)</div>
                 <div class="card-body">
                     <table class="table table-striped table-bordered">
                         <thead class="table-dark">
                             <tr>
-                                <th>Sucursal</th><th>Zona</th><th>Unidades</th>
-                                <th>Cuota ($)</th><th>Total Ventas ($)</th><th>% Cumplimiento</th><th>Progreso</th>
+                                <th>Sucursal</th>
+                                <th>Tipo</th>
+                                <th>Unidades</th>
+                                <th>Ventas $</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($sucursalesMA as $s):
-                                $cumpl = round($s['cumplimiento'],1);
-                                $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
-                                $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
-                            ?>
-                            <tr class="<?= $fila ?>">
-                                <td><?= $s['sucursal'] ?></td>
-                                <td>Zona <?= $s['zona'] ?></td>
-                                <td><?= $s['unidades'] ?></td>
-                                <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
+                            <?php foreach ($sucursalesMA as $s): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($s['sucursal']) ?></td>
+                                <td><?= htmlspecialchars($s['subtipo']) ?></td>
+                                <td><?= (int)$s['unidades'] ?></td>
                                 <td>$<?= number_format($s['total_ventas'],2) ?></td>
-                                <td><?= $cumpl ?>% <?= $estado ?></td>
-                                <td>
-                                    <div class="progress" style="height:20px">
-                                        <div class="progress-bar <?= $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger') ?>"
-                                            style="width:<?= min(100,$cumpl) ?>%"><?= $cumpl ?>%</div>
-                                    </div>
-                                </td>
                             </tr>
                             <?php endforeach;?>
                         </tbody>

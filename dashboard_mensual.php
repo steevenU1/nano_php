@@ -8,27 +8,34 @@ if (empty($_SESSION['id_usuario'])) {
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/navbar.php';
 
-// 🔹 Nombre de mes en español
-function nombreMes($mes) {
-    $meses = [1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'];
-    return $meses[$mes] ?? '';
+/* -------------------------------
+   Utilidades
+---------------------------------*/
+if (!function_exists('nombreMes')) {
+    function nombreMes($mes) {
+        $meses = [1=>'Enero',2=>'Febrero',3=>'Marzo',4=>'Abril',5=>'Mayo',6=>'Junio',7=>'Julio',8=>'Agosto',9=>'Septiembre',10=>'Octubre',11=>'Noviembre',12=>'Diciembre'];
+        return $meses[$mes] ?? '';
+    }
+}
+function badgeFila($pct) {
+    if ($pct === null) return '';
+    return $pct>=100 ? 'table-success' : ($pct>=60 ? 'table-warning' : 'table-danger');
 }
 
-// 🔹 Mes/Año seleccionados
+/* -------------------------------
+   Mes/Año seleccionados y rango
+---------------------------------*/
 $mes  = isset($_GET['mes'])  ? (int)$_GET['mes']  : (int)date('n');
 $anio = isset($_GET['anio']) ? (int)$_GET['anio'] : (int)date('Y');
 
-// 🔹 Rango del mes
 $inicioMes = sprintf('%04d-%02d-01', $anio, $mes);
 $finMes    = date('Y-m-t', strtotime($inicioMes));
-$diasMes   = (int)date('t', strtotime($inicioMes));
-$factorSem = 7 / max(1,$diasMes); // semanas “efectivas” del mes
 
 /* ======================================================
    0) Cuota mensual ejecutivos (POR EJECUTIVO)
 ====================================================== */
-$cuotaMesU_porEj = 0.0;  // unidades / ejecutivo / mes
-$cuotaMesM_porEj = 0.0;  // monto $ / ejecutivo / mes
+$cuotaMesU_porEj = 0.0;
+$cuotaMesM_porEj = 0.0;
 $qe = $conn->prepare("
     SELECT cuota_unidades, cuota_monto
     FROM cuotas_mensuales_ejecutivos
@@ -43,16 +50,9 @@ if ($rowQ = $qe->get_result()->fetch_assoc()) {
 }
 $qe->close();
 
-// Helper badge fila
-function badgeFila($pct) {
-    if ($pct === null) return '';
-    return $pct>=100 ? 'table-success' : ($pct>=60 ? 'table-warning' : 'table-danger');
-}
-
 /* ======================================================
    1) Sucursales PROPIAS: ventas, unidades, cuotas mensuales
 ====================================================== */
-// Cuotas mensuales por sucursal (aplican igual para ambas vistas; filtraremos por id)
 $cuotasSuc = [];
 $q = $conn->prepare("SELECT id_sucursal, cuota_unidades, cuota_monto FROM cuotas_mensuales WHERE anio=? AND mes=?");
 $q->bind_param("ii", $anio, $mes);
@@ -66,13 +66,15 @@ while ($row = $r->fetch_assoc()) {
 }
 $q->close();
 
-$sqlSucBase = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal, s.zona,
+/* PROPIAS: usa detalle + combo=2, excluye modem/mifi */
+$sqlSucPropias = "
+    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
+           s.subtipo AS tipo,
            IFNULL(SUM(
                 CASE 
                     WHEN dv.id IS NULL THEN 0
                     WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                    WHEN v.tipo_venta='Financiamiento+Combo' 
+                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
                          AND dv.id = (
                              SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id
                          )
@@ -93,15 +95,12 @@ $sqlSucBase = "
         AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
     LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
     LEFT JOIN productos p ON p.id = dv.id_producto
-    WHERE s.tipo_sucursal='Tienda' AND s.subtipo = ?
+    WHERE s.tipo_sucursal='Tienda' AND s.subtipo = 'Propia'
     GROUP BY s.id
-    ORDER BY s.zona, s.nombre
+    ORDER BY s.nombre
 ";
-
-/* ---- PROPIAS ---- */
-$stmt = $conn->prepare($sqlSucBase);
-$subtipoPropia = 'Propia';
-$stmt->bind_param("sss", $inicioMes, $finMes, $subtipoPropia);
+$stmt = $conn->prepare($sqlSucPropias);
+$stmt->bind_param("ss", $inicioMes, $finMes);
 $stmt->execute();
 $res = $stmt->get_result();
 
@@ -114,12 +113,12 @@ while ($row = $res->fetch_assoc()) {
     $id_suc = (int)$row['id_sucursal'];
     $cuotaUnidades = $cuotasSuc[$id_suc]['cuota_unidades'] ?? 0;
     $cuotaMonto    = $cuotasSuc[$id_suc]['cuota_monto']    ?? 0;
-    $cumpl = $cuotaMonto > 0 ? ($row['ventas']/$cuotaMonto*100) : 0;
+    $cumpl = $cuotaMonto > 0 ? ((float)$row['ventas']/$cuotaMonto*100) : 0;
 
     $sucursalesPropias[] = [
         'id_sucursal'     => $id_suc,
         'sucursal'        => $row['sucursal'],
-        'zona'            => $row['zona'],
+        'tipo'            => $row['tipo'],
         'unidades'        => (int)$row['unidades'],
         'ventas'          => (float)$row['ventas'],
         'cuota_unidades'  => (int)$cuotaUnidades,
@@ -134,20 +133,7 @@ while ($row = $res->fetch_assoc()) {
 $stmt->close();
 
 /* ======================================================
-   2) Zonas (agregados) — SOLO PROPIAS
-====================================================== */
-$zonas = [];
-foreach ($sucursalesPropias as $s) {
-    $z = $s['zona'];
-    if (!isset($zonas[$z])) $zonas[$z] = ['unidades'=>0,'ventas'=>0,'cuota'=>0];
-    $zonas[$z]['unidades'] += $s['unidades'];
-    $zonas[$z]['ventas']   += $s['ventas'];
-    $zonas[$z]['cuota']    += $s['cuota_monto'];
-}
-$porcentajeGlobal = $totalGlobalCuota > 0 ? ($totalGlobalVentas/$totalGlobalCuota*100) : 0;
-
-/* ======================================================
-   3) Ejecutivos (solo de sucursales PROPIAS)
+   3) Ejecutivos (solo PROPIAS)
 ====================================================== */
 $sqlEj = "
     SELECT 
@@ -158,7 +144,7 @@ $sqlEj = "
             CASE 
                 WHEN dv.id IS NULL THEN 0
                 WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                WHEN v.tipo_venta='Financiamiento+Combo' 
+                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
                      AND dv.id = (
                          SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id
                      )
@@ -191,7 +177,7 @@ $resEj = $stEj->get_result();
 
 $ejecutivos = [];
 while ($row = $resEj->fetch_assoc()) {
-    $cumpl_uni = $cuotaMesU_porEj>0 ? ($row['unidades']/$cuotaMesU_porEj*100) : null;
+    $cumpl_uni = $cuotaMesU_porEj>0 ? ((int)$row['unidades']/$cuotaMesU_porEj*100) : null;
 
     $ejecutivos[] = [
         'id'             => (int)$row['id'],
@@ -206,9 +192,8 @@ while ($row = $resEj->fetch_assoc()) {
 $stEj->close();
 
 /* ======================================================
-   4) 📈 Serie MENSUAL por SEMANAS (mar–lun) — SOLO PROPIAS
+   4) Serie MENSUAL por SEMANAS (mar–lun) — SOLO PROPIAS
 ====================================================== */
-// Helper: inicio de semana (martes) para una fecha
 function inicioSemanaMartes(DateTime $dt): DateTime {
     $dow = (int)$dt->format('N'); // 1=Lun..7=Dom
     $diff = $dow - 2;            // Martes=2
@@ -217,17 +202,14 @@ function inicioSemanaMartes(DateTime $dt): DateTime {
     $start->modify("-{$diff} days")->setTime(0,0,0);
     return $start;
 }
-
-// Construir tramos semanales del mes (mar–lun)
 $inicioMesDT = new DateTime($inicioMes.' 00:00:00');
 $finMesDT    = new DateTime($finMes.' 23:59:59');
 
-$wkStart = inicioSemanaMartes(clone $inicioMesDT); // martes anterior o mismo día
-$semanas = []; // ['ini'=>'Y-m-d','fin'=>'Y-m-d','label'=>'Sem N (dd/mm–dd/mm)']
+$wkStart = inicioSemanaMartes(clone $inicioMesDT);
+$semanas = [];
 $idx = 1;
 while ($wkStart <= $finMesDT) {
     $wkFin = (clone $wkStart)->modify('+6 days')->setTime(23,59,59);
-    // recorte al mes para mostrarse en la etiqueta
     $visIni = ($wkStart < $inicioMesDT) ? $inicioMesDT : $wkStart;
     $visFin = ($wkFin   > $finMesDT)    ? $finMesDT    : $wkFin;
     $semanas[] = [
@@ -238,23 +220,19 @@ while ($wkStart <= $finMesDT) {
     $idx++;
     $wkStart->modify('+7 days')->setTime(0,0,0);
 }
-
-// Mapa rápido: día → índice semana
 function findWeekIndex(string $dia, array $semanas): ?int {
     foreach ($semanas as $i => $sem) {
         if ($dia >= $sem['ini'] && $dia <= $sem['fin']) return $i;
     }
     return null;
 }
-
-// Traer unidades por sucursal y DÍA en el mes (solo PROPIAS), luego agregamos por semana
 $sqlMonthDailyPropias = "
 SELECT s.nombre AS sucursal,
        DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
        SUM(CASE 
              WHEN dv.id IS NULL THEN 0
              WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-             WHEN v.tipo_venta='Financiamiento+Combo' 
+             WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
                   AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
                   THEN 2
              ELSE 1
@@ -274,11 +252,11 @@ $stMd->bind_param("ss", $inicioMes, $finMes);
 $stMd->execute();
 $resMd = $stMd->get_result();
 
-$weeklySeries = []; // [sucursal => [indexSemana => unidades]]
+$weeklySeries = []; // [sucursal => [idxSemana => unidades]]
 while ($r = $resMd->fetch_assoc()) {
     $suc = $r['sucursal'];
     $dia = $r['dia'];
-    if (empty($dia)) { continue; }
+    if (empty($dia)) continue;
     $u   = (int)$r['unidades'];
     $i   = findWeekIndex($dia, $semanas);
     if ($i === null) continue;
@@ -288,7 +266,6 @@ while ($r = $resMd->fetch_assoc()) {
 }
 $stMd->close();
 
-// Garantiza que todas las sucursales existan y rellena ceros
 $labelsSemanas = array_column($semanas, 'label');
 $k = count($labelsSemanas);
 foreach ($sucursalesPropias as $s) {
@@ -299,8 +276,6 @@ foreach ($sucursalesPropias as $s) {
     }
     ksort($weeklySeries[$name]);
 }
-
-// Construye datasets para Chart.js (solo PROPIAS)
 $datasetsMonth = [];
 foreach ($weeklySeries as $sucursalNombre => $serie) {
     $row = [];
@@ -315,34 +290,85 @@ foreach ($weeklySeries as $sucursalNombre => $serie) {
 }
 
 /* ======================================================
-   5) Sucursales MASTER ADMIN (tercer tab)
+   5) Master Admin — SIN CUOTA / SIN %
+   Reglas de unidades y ventas como en dashboard_unificado
 ====================================================== */
-$stmtMA = $conn->prepare($sqlSucBase);
-$subtipoMA = 'Master Admin';
-$stmtMA->bind_param("sss", $inicioMes, $finMes, $subtipoMA);
-$stmtMA->execute();
-$resMA = $stmtMA->get_result();
+$sqlSucMA = "
+    SELECT 
+        s.id   AS id_sucursal,
+        s.nombre AS sucursal,
+        s.subtipo AS tipo,
+
+        -- Unidades
+        IFNULL(SUM(
+            CASE 
+                WHEN v.id IS NULL THEN 0
+                WHEN v.origen_ma='nano' THEN
+                    CASE 
+                        WHEN dv.id IS NULL THEN 
+                            CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                        WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN
+                            CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                        ELSE 0
+                    END
+                ELSE
+                    CASE 
+                        WHEN dv.id IS NULL THEN 0
+                        WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                        ELSE 1
+                    END
+            END
+        ),0) AS unidades,
+
+        -- Ventas ($)
+        IFNULL(SUM(
+            CASE 
+                WHEN v.id IS NULL THEN 0
+                WHEN v.origen_ma='nano' THEN
+                    CASE 
+                        WHEN dv.id IS NULL THEN IFNULL(v.precio_venta,0)
+                        WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id) THEN IFNULL(v.precio_venta,0)
+                        ELSE 0
+                    END
+                ELSE
+                    CASE 
+                        WHEN dv.id IS NULL OR LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                        ELSE IFNULL(dv.precio_unitario,0)
+                    END
+            END
+        ),0) AS ventas
+
+    FROM sucursales s
+    LEFT JOIN ventas v
+           ON v.id_sucursal = s.id
+          AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+    LEFT JOIN productos p      ON p.id       = dv.id_producto
+    WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
+    GROUP BY s.id
+    ORDER BY ventas DESC
+";
+$stMA = $conn->prepare($sqlSucMA);
+$stMA->bind_param("ss", $inicioMes, $finMes);
+$stMA->execute();
+$resMA = $stMA->get_result();
 
 $sucursalesMA = [];
+$totalMAUnidades = 0;
+$totalMAVentas   = 0.0;
+
 while ($row = $resMA->fetch_assoc()) {
-    $id_suc = (int)$row['id_sucursal'];
-    $cuotaUnidades = $cuotasSuc[$id_suc]['cuota_unidades'] ?? 0;
-    $cuotaMonto    = $cuotasSuc[$id_suc]['cuota_monto']    ?? 0;
-    $cumpl = $cuotaMonto > 0 ? ($row['ventas']/$cuotaMonto*100) : 0;
-
     $sucursalesMA[] = [
-        'id_sucursal'     => $id_suc,
-        'sucursal'        => $row['sucursal'],
-        'zona'            => $row['zona'],
-        'unidades'        => (int)$row['unidades'],
-        'ventas'          => (float)$row['ventas'],
-        'cuota_unidades'  => (int)$cuotaUnidades,
-        'cuota_monto'     => (float)$cuotaMonto,
-        'cumplimiento'    => $cumpl
+        'id_sucursal' => (int)$row['id_sucursal'],
+        'sucursal'    => $row['sucursal'],
+        'tipo'        => $row['tipo'],
+        'unidades'    => (int)$row['unidades'],
+        'ventas'      => (float)$row['ventas'],
     ];
+    $totalMAUnidades += (int)$row['unidades'];
+    $totalMAVentas   += (float)$row['ventas'];
 }
-$stmtMA->close();
-
+$stMA->close();
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -382,29 +408,42 @@ $stmtMA->close();
     </div>
   </form>
 
-  <!-- Tarjetas Zonas + Global (solo PROPIAS) -->
+  <!-- Tarjetas superiores: Propias, Master Admin y Global (Propias) -->
   <div class="row mb-4">
-    <?php foreach ($zonas as $zona => $info): 
-      $cumpl = $info['cuota']>0 ? ($info['ventas']/$info['cuota']*100) : 0;
-    ?>
-      <div class="col-md-4 mb-3">
-        <div class="card shadow text-center">
-          <div class="card-header bg-dark text-white">Zona <?= htmlspecialchars($zona) ?> (Propias)</div>
-          <div class="card-body">
-            <h5><?= number_format($cumpl,1) ?>% Cumplimiento</h5>
-            <p class="mb-0">
-              Unidades: <?= (int)$info['unidades'] ?><br>
-              Ventas: $<?= number_format($info['ventas'],2) ?><br>
-              Cuota: $<?= number_format($info['cuota'],2) ?>
-            </p>
-          </div>
+    <!-- Propias -->
+    <div class="col-md-4 mb-3">
+      <div class="card shadow text-center">
+        <div class="card-header bg-dark text-white">Propias</div>
+        <div class="card-body">
+          <?php $pctPropias = $totalGlobalCuota>0 ? ($totalGlobalVentas/$totalGlobalCuota*100) : 0; ?>
+          <h5><?= number_format($pctPropias,1) ?>% Cumplimiento</h5>
+          <p class="mb-0">
+            Unidades: <?= (int)$totalGlobalUnidades ?><br>
+            Ventas: $<?= number_format($totalGlobalVentas,2) ?><br>
+            Cuota: $<?= number_format($totalGlobalCuota,2) ?>
+          </p>
         </div>
       </div>
-    <?php endforeach; ?>
+    </div>
+    <!-- Master Admin -->
+    <div class="col-md-4 mb-3">
+      <div class="card shadow text-center">
+        <div class="card-header bg-secondary text-white">Master Admin</div>
+        <div class="card-body">
+          <h5>Sin cuota</h5>
+          <p class="mb-0">
+            Unidades: <?= (int)$totalMAUnidades ?><br>
+            Ventas: $<?= number_format($totalMAVentas,2) ?>
+          </p>
+        </div>
+      </div>
+    </div>
+    <!-- Global (Propias) -->
     <div class="col-md-4 mb-3">
       <div class="card shadow text-center">
         <div class="card-header bg-primary text-white">🌎 Global (Propias)</div>
         <div class="card-body">
+          <?php $porcentajeGlobal = $totalGlobalCuota>0 ? ($totalGlobalVentas/$totalGlobalCuota*100) : 0; ?>
           <h5><?= number_format($porcentajeGlobal,1) ?>% Cumplimiento</h5>
           <p class="mb-0">
             Unidades: <?= (int)$totalGlobalUnidades ?><br>
@@ -445,7 +484,7 @@ $stmtMA->close();
           <table class="table table-bordered table-striped table-sm mb-0">
             <thead class="table-dark">
               <tr>
-                <th>Sucursal</th><th>Zona</th><th>Unidades</th><th>Cuota Unid.</th>
+                <th>Sucursal</th><th>Tipo</th><th>Unidades</th><th>Cuota Unid.</th>
                 <th>Ventas $</th><th>Cuota $</th><th>% Cumplimiento</th>
               </tr>
             </thead>
@@ -456,7 +495,7 @@ $stmtMA->close();
               ?>
               <tr class="<?= $fila ?>">
                 <td><?= htmlspecialchars($s['sucursal']) ?></td>
-                <td><?= htmlspecialchars($s['zona']) ?></td>
+                <td><?= htmlspecialchars($s['tipo']) ?></td>
                 <td><?= (int)$s['unidades'] ?></td>
                 <td><?= (int)$s['cuota_unidades'] ?></td>
                 <td>$<?= number_format($s['ventas'],2) ?></td>
@@ -470,7 +509,7 @@ $stmtMA->close();
       </div>
     </div>
 
-    <!-- Ejecutivos (solo sucursales PROPIAS) -->
+    <!-- Ejecutivos (solo PROPIAS) -->
     <div class="tab-pane fade" id="tab-ej" role="tabpanel">
       <div class="card shadow mt-3">
         <div class="card-header bg-dark text-white">Productividad mensual por Ejecutivo (Propias)</div>
@@ -517,7 +556,7 @@ $stmtMA->close();
       </div>
     </div>
 
-    <!-- Master Admin -->
+    <!-- Master Admin (SIN cuota / SIN %) -->
     <div class="tab-pane fade" id="tab-ma" role="tabpanel">
       <div class="card shadow mt-3">
         <div class="card-header bg-secondary text-white">Sucursales (Master Admin)</div>
@@ -525,36 +564,28 @@ $stmtMA->close();
           <table class="table table-bordered table-striped table-sm mb-0">
             <thead class="table-dark">
               <tr>
-                <th>Sucursal</th><th>Zona</th><th>Unidades</th><th>Cuota Unid.</th>
-                <th>Ventas $</th><th>Cuota $</th><th>% Cumplimiento</th>
+                <th>Sucursal</th><th>Tipo</th><th>Unidades</th><th>Ventas $</th>
               </tr>
             </thead>
             <tbody>
-              <?php foreach ($sucursalesMA as $s): 
-                $fila  = badgeFila($s['cumplimiento']);
-                $estado= $s['cumplimiento']>=100?"✅":($s['cumplimiento']>=60?"⚠️":"❌");
-              ?>
-              <tr class="<?= $fila ?>">
+              <?php foreach ($sucursalesMA as $s): ?>
+              <tr>
                 <td><?= htmlspecialchars($s['sucursal']) ?></td>
-                <td><?= htmlspecialchars($s['zona']) ?></td>
+                <td><?= htmlspecialchars($s['tipo']) ?></td>
                 <td><?= (int)$s['unidades'] ?></td>
-                <td><?= (int)$s['cuota_unidades'] ?></td>
                 <td>$<?= number_format($s['ventas'],2) ?></td>
-                <td>$<?= number_format($s['cuota_monto'],2) ?></td>
-                <td><?= round($s['cumplimiento'],1) ?>% <?= $estado ?></td>
               </tr>
               <?php endforeach; ?>
             </tbody>
           </table>
         </div>
       </div>
-      <!-- Nota: si más adelante quieres un gráfico para MA, duplicamos la lógica del gráfico filtrando subtipo='Master Admin'. -->
+      <!-- Si luego quieres KPIs/Gráfica para MA, lo armamos sin cuota. -->
     </div>
 
   </div>
 </div>
 
-<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 // Datos para la gráfica mensual por semanas (solo PROPIAS)
