@@ -298,7 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     const modal = new bootstrap.Modal(document.getElementById('bienvenidaModal'), {backdrop:'static', keyboard:false});
     modal.show();
-    setTimeout(() => { window.location.href = 'dashboard_unificado.php'; }, 1500);
+    setTimeout(() => { window.location.href = 'dashboard_unificado.php'; }, 1600);
   })();
 </script>
 </body>
