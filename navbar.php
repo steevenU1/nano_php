@@ -152,7 +152,7 @@ $grpEfectivo   = ['cobros.php', 'cortes_caja.php', 'generar_corte.php', 'deposit
 $grpOperacion  = ['lista_precios.php', 'prospectos.php', 'insumos_pedido.php', 'insumos_admin.php', 'gestionar_usuarios.php', 'mantenimiento_solicitar.php', 'mantenimiento_admin.php'];
 $grpRH         = ['reporte_nomina.php', 'reporte_nomina_gerentes_zona.php', 'admin_expedientes.php'];
 $grpOperativos = ['insumos_catalogo.php', 'actualizar_precios_modelo.php', 'cuotas_mensuales.php', 'cuotas_mensuales_ejecutivos.php', 'cuotas_sucursales.php', 'cargar_cuotas_semanales.php', 'esquemas_comisiones_ejecutivos.php', 'esquemas_comisiones_gerentes.php', 'esquemas_comisiones_pospago.php', 'comisiones_especiales_equipos.php', 'carga_masiva_productos.php', 'carga_masiva_sims.php', 'alta_usuario.php', 'alta_sucursal.php'];
-$grpCeleb      = ['cumples_aniversarios.php'];
+$grpCeleb      = ['cumples_aniversarios.php','cuadro_honor.php'];
 
 // Nombre corto para topbar
 $nombreCorto = firstName($nombreUsuario);
@@ -175,7 +175,7 @@ $nombreCorto = firstName($nombreUsuario);
     --nb-underline: #66d9ff;
     --nb-ring: #22d3ee;
 
-    /* 👇 Ajustes de tamaño para ganar espacio */
+    /*  Ajustes de tamaño para ganar espacio */
     --nb-font-brand: .98rem;     /* Central2.0 */
     --nb-font-link:  .90rem;     /* Links del navbar */
     --nb-font-drop:  .88rem;     /* Items de dropdown */
@@ -216,7 +216,7 @@ $nombreCorto = firstName($nombreUsuario);
     .brand-title { animation: none !important; }
   }
 
-  /* 🔹 Links más compactos */
+  /* Links más compactos */
   .navbar.pretty .navbar-nav .nav-link {
     color: var(--nb-text);
     opacity: .92;
@@ -253,7 +253,7 @@ $nombreCorto = firstName($nombreUsuario);
     font-weight: 600;
   }
 
-  /* 🔹 Dropdown más compacto */
+  /*  Dropdown más compacto */
   .dropdown-menu.dropdown-menu-dark {
     background: rgba(18, 20, 26, .98);
     border: 1px solid var(--nb-border);
@@ -573,16 +573,16 @@ $nombreCorto = firstName($nombreUsuario);
           </li>
         <?php endif; ?>
 
-        <!-- CELEBRACIONES (oculto para Logística) -->
+        <!-- CELEBRACIONES -->
         <?php if ($rolUsuario !== 'Logistica'): ?>
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle<?= parentActive($grpCeleb) ?>" href="#" role="button" data-bs-toggle="dropdown"><i class="bi bi-balloon-heart me-1"></i>Celebraciones</a>
             <ul class="dropdown-menu dropdown-menu-dark">
               <li><a class="dropdown-item<?= isActive(['cumples_aniversarios.php']) ?>" href="cumples_aniversarios.php">🎉 Cumpleaños & Aniversarios</a></li>
+              <li><a class="dropdown-item<?= isActive(['cuadro_honor.php']) ?>" href="cuadro_honor.php">🏆 Cuadro de Honor</a></li>
             </ul>
           </li>
         <?php endif; ?>
-
       </ul>
 
       <!-- DERECHA: Perfil (avatar / iniciales) -->

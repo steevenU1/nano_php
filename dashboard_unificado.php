@@ -33,7 +33,6 @@ $finSemana    = $finObj->format('Y-m-d');
 
 /* ==============================
    Ejecutivos (solo Propias)
-   * Mostrar columna Subtipo
 ================================= */
 $sqlEjecutivos = "
     SELECT 
@@ -220,8 +219,14 @@ while ($row = $resSucursalesMA->fetch_assoc()) {
 }
 
 /* ==========================================================
-   Serie semanal (mar–lun) por sucursal — TODAS
+   Serie semanal (mar–lun) por sucursal — SOLO FILTRO DEL GRÁFICO
+   g=propias | ma | todas
+   - MA con origen_ma='nano' cuenta por venta (1 ó 2 si F+Combo)
+   - Resto cuenta por detalle_venta excluyendo modem/mifi
 ========================================================== */
+$g = $_GET['g'] ?? 'todas';
+
+// labels de la semana
 $labelsSemanaISO = [];
 $labelsSemanaVis = [];
 $diasES = [1=>'Lun','Mar','Mié','Jue','Vie','Sáb','Dom']; // 1=Lun ... 7=Dom
@@ -232,41 +237,115 @@ for ($i=0; $i<7; $i++) {
     $cur->modify('+1 day');
 }
 
-$sqlWeek = "
-SELECT s.nombre AS sucursal,
-       DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
-       SUM(CASE 
-             WHEN dv.id IS NULL THEN 0
-             WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-             WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
-                  AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
-                  THEN 2
-             ELSE 1
-           END) AS unidades
-FROM sucursales s
-LEFT JOIN ventas v
-  ON v.id_sucursal = s.id
- AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-LEFT JOIN productos p ON p.id = dv.id_producto
-WHERE s.tipo_sucursal='Tienda'
-GROUP BY s.id, dia
-";
+$whereBase = "s.tipo_sucursal='Tienda'";
+if ($g === 'propias') {
+    $whereBase .= " AND s.subtipo='Propia'";
+} elseif ($g === 'ma') {
+    $whereBase .= " AND s.subtipo='Master Admin'";
+}
+
+// Query semanal con reglas por grupo
+if ($g === 'ma') {
+    $sqlWeek = "
+    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
+           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
+           SUM(
+             CASE
+               WHEN v.id IS NULL THEN 0
+               WHEN COALESCE(v.origen_ma,'propio')='nano' THEN
+                    CASE
+                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2
+                      ELSE 1
+                    END
+               ELSE
+                    CASE
+                      WHEN dv.id IS NULL THEN 0
+                      WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                      ELSE 1
+                    END
+             END
+           ) AS unidades
+    FROM sucursales s
+    LEFT JOIN ventas v
+      ON v.id_sucursal = s.id
+     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+    LEFT JOIN productos p      ON p.id       = dv.id_producto
+    WHERE $whereBase
+    GROUP BY s.id, dia
+    ";
+} elseif ($g === 'propias') {
+    $sqlWeek = "
+    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
+           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
+           SUM(
+             CASE 
+               WHEN dv.id IS NULL THEN 0
+               WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+               WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
+                    AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
+                    THEN 2
+               ELSE 1
+             END
+           ) AS unidades
+    FROM sucursales s
+    LEFT JOIN ventas v
+      ON v.id_sucursal = s.id
+     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+    LEFT JOIN productos p ON p.id = dv.id_producto
+    WHERE $whereBase
+    GROUP BY s.id, dia
+    ";
+} else { // todas
+    $sqlWeek = "
+    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
+           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
+           SUM(
+             CASE
+               WHEN v.id IS NULL THEN 0
+               WHEN s.subtipo='Master Admin' AND COALESCE(v.origen_ma,'propio')='nano' THEN
+                    CASE
+                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2
+                      ELSE 1
+                    END
+               ELSE
+                    CASE
+                      WHEN dv.id IS NULL THEN 0
+                      WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
+                           AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
+                           THEN 2
+                      ELSE 1
+                    END
+             END
+           ) AS unidades
+    FROM sucursales s
+    LEFT JOIN ventas v
+      ON v.id_sucursal = s.id
+     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+    LEFT JOIN productos p ON p.id = dv.id_producto
+    WHERE s.tipo_sucursal='Tienda'
+    GROUP BY s.id, dia
+    ";
+}
+
 $stmtW = $conn->prepare($sqlWeek);
 $stmtW->bind_param("ss", $inicioSemana, $finSemana);
 $stmtW->execute();
 $resW = $stmtW->get_result();
 
+// Construir datasets del gráfico
 $weekSeries = [];   // [sucursal => [dateISO=>unid]]
 while ($r = $resW->fetch_assoc()) {
     $suc = $r['sucursal'];
     $dia = $r['dia'];
     $u   = (int)$r['unidades'];
-    if (!isset($weekSeries[$suc])) $weekSeries[$suc] = [];
-    if ($dia) $weekSeries[$suc][$dia] = $u;
-}
-foreach ($sucursales as $s) {
-    if (!isset($weekSeries[$s['sucursal']])) $weekSeries[$s['sucursal']] = [];
+    if ($dia) {
+        if (!isset($weekSeries[$suc])) $weekSeries[$suc] = [];
+        $weekSeries[$suc][$dia] = $u;
+    }
 }
 $datasetsWeek = [];
 foreach ($weekSeries as $sucursalNombre => $serie) {
@@ -298,16 +377,24 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
 <div class="container mt-4">
     <h2>📊 Dashboard Semanal Nano</h2>
 
-    <!-- Selector de semana -->
+    <!-- Selector de semana (global, no toca tablas) -->
     <form method="GET" class="mb-3">
-        <label><strong>Selecciona semana:</strong></label>
-        <select name="semana" class="form-select w-auto d-inline-block" onchange="this.form.submit()">
+        <label class="me-2"><strong>Semana:</strong></label>
+        <select name="semana" class="form-select w-auto d-inline-block me-3" onchange="this.form.submit()">
             <?php for ($i=0; $i<8; $i++):
                 list($ini, $fin) = obtenerSemanaPorIndice($i);
-                $texto = "Semana del {$ini->format('d/m/Y')} al {$fin->format('d/m/Y')}";
+                $texto = "Del {$ini->format('d/m/Y')} al {$fin->format('d/m/Y')}";
             ?>
             <option value="<?= $i ?>" <?= $i==$semanaSeleccionada?'selected':'' ?>><?= $texto ?></option>
             <?php endfor; ?>
+        </select>
+
+        <!-- Filtro SOLO para el gráfico -->
+        <label class="me-2"><strong>Gráfico:</strong></label>
+        <select name="g" class="form-select w-auto d-inline-block me-2" onchange="this.form.submit()">
+            <option value="todas"   <?= $g==='todas'?'selected':'' ?>>Todas</option>
+            <option value="propias" <?= $g==='propias'?'selected':'' ?>>Propias</option>
+            <option value="ma"      <?= $g==='ma'?'selected':'' ?>>Master Admin</option>
         </select>
     </form>
 
@@ -372,9 +459,12 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
 
     <!-- Gráfica semanal -->
     <div class="card shadow mb-4">
-        <div class="card-header bg-dark text-white">Comportamiento Semanal por Sucursal (mar–lun)</div>
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+          <span>Comportamiento Semanal por Sucursal (mar–lun)</span>
+          <small class="text-white-50">Grupo gráfico: <strong><?= strtoupper(htmlspecialchars($g)) ?></strong></small>
+        </div>
         <div class="card-body">
-            <div style="position:relative; height:220px;">
+            <div style="position:relative; height:260px;">
                 <canvas id="chartSemanal"></canvas>
             </div>
             <small class="text-muted d-block mt-2">* Toca los nombres en la leyenda para ocultar/mostrar sucursales.</small>
@@ -517,6 +607,7 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
     </div>
 </div>
 
+<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 const labelsSemana = <?= json_encode($labelsSemanaVis, JSON_UNESCAPED_UNICODE) ?>;
