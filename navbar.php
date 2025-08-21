@@ -152,7 +152,7 @@ $grpEfectivo   = ['cobros.php', 'cortes_caja.php', 'generar_corte.php', 'deposit
 $grpOperacion  = ['lista_precios.php', 'prospectos.php', 'insumos_pedido.php', 'insumos_admin.php', 'gestionar_usuarios.php', 'mantenimiento_solicitar.php', 'mantenimiento_admin.php'];
 $grpRH         = ['reporte_nomina.php', 'reporte_nomina_gerentes_zona.php', 'admin_expedientes.php'];
 $grpOperativos = ['insumos_catalogo.php', 'actualizar_precios_modelo.php', 'cuotas_mensuales.php', 'cuotas_mensuales_ejecutivos.php', 'cuotas_sucursales.php', 'cargar_cuotas_semanales.php', 'esquemas_comisiones_ejecutivos.php', 'esquemas_comisiones_gerentes.php', 'esquemas_comisiones_pospago.php', 'comisiones_especiales_equipos.php', 'carga_masiva_productos.php', 'carga_masiva_sims.php', 'alta_usuario.php', 'alta_sucursal.php'];
-$grpCeleb      = ['cumples_aniversarios.php','cuadro_honor.php'];
+$grpCeleb      = ['cumples_aniversarios.php', 'cuadro_honor.php'];
 
 // Nombre corto para topbar
 $nombreCorto = firstName($nombreUsuario);
@@ -176,11 +176,16 @@ $nombreCorto = firstName($nombreUsuario);
     --nb-ring: #22d3ee;
 
     /*  Ajustes de tamaño para ganar espacio */
-    --nb-font-brand: .98rem;     /* Central2.0 */
-    --nb-font-link:  .90rem;     /* Links del navbar */
-    --nb-font-drop:  .88rem;     /* Items de dropdown */
-    --nb-font-head:  .72rem;     /* Encabezados del dropdown */
-    --nb-link-xpad:  .55rem;     /* Padding horizontal de cada link */
+    --nb-font-brand: .98rem;
+    /* Central2.0 */
+    --nb-font-link: .90rem;
+    /* Links del navbar */
+    --nb-font-drop: .88rem;
+    /* Items de dropdown */
+    --nb-font-head: .72rem;
+    /* Encabezados del dropdown */
+    --nb-link-xpad: .55rem;
+    /* Padding horizontal de cada link */
   }
 
   .navbar.pretty {
@@ -205,15 +210,24 @@ $nombreCorto = firstName($nombreUsuario);
     background-clip: text;
     -webkit-text-fill-color: transparent;
     animation: brandGradient 8s linear infinite;
-    font-size: inherit; /* usa --nb-font-brand */
+    font-size: inherit;
+    /* usa --nb-font-brand */
   }
 
   @keyframes brandGradient {
-    0% { background-position: 0% 50%; }
-    100% { background-position: 200% 50%; }
+    0% {
+      background-position: 0% 50%;
+    }
+
+    100% {
+      background-position: 200% 50%;
+    }
   }
+
   @media (prefers-reduced-motion: reduce) {
-    .brand-title { animation: none !important; }
+    .brand-title {
+      animation: none !important;
+    }
   }
 
   /* Links más compactos */
@@ -227,10 +241,12 @@ $nombreCorto = firstName($nombreUsuario);
     padding-left: var(--nb-link-xpad);
     padding-right: var(--nb-link-xpad);
   }
+
   .navbar.pretty .navbar-nav .nav-link:hover {
     opacity: 1;
     transform: translateY(-1px);
   }
+
   .navbar.pretty .nav-link::after {
     content: "";
     position: absolute;
@@ -243,10 +259,12 @@ $nombreCorto = firstName($nombreUsuario);
     transform-origin: center;
     transition: transform .22s ease-out;
   }
+
   .navbar.pretty .nav-link:hover::after,
   .navbar.pretty .nav-link.active::after {
     transform: scaleX(1);
   }
+
   .navbar.pretty .nav-link.active,
   .navbar.pretty .dropdown-item.active {
     color: #fff !important;
@@ -261,17 +279,21 @@ $nombreCorto = firstName($nombreUsuario);
     border-radius: 14px;
     padding: .35rem;
   }
+
   .dropdown-menu-dark .dropdown-item {
     border-radius: 10px;
     color: var(--nb-text);
     font-size: var(--nb-font-drop);
     line-height: 1.15;
-    padding: .35rem .65rem; /* menos padding horizontal */
+    padding: .35rem .65rem;
+    /* menos padding horizontal */
   }
+
   .dropdown-menu-dark .dropdown-item:hover {
     background: var(--nb-hover);
     color: #fff;
   }
+
   .dropdown-menu-dark .dropdown-header {
     color: var(--nb-muted);
     font-size: var(--nb-font-head);
@@ -279,7 +301,10 @@ $nombreCorto = firstName($nombreUsuario);
     text-transform: uppercase;
     padding: .25rem .65rem;
   }
-  .dropdown-divider { border-top-color: var(--nb-border) !important; }
+
+  .dropdown-divider {
+    border-top-color: var(--nb-border) !important;
+  }
 
   /* Avatar / iniciales (igual) */
   .nav-avatar,
@@ -296,31 +321,62 @@ $nombreCorto = firstName($nombreUsuario);
     position: relative;
     box-shadow: 0 0 0 2px rgba(255, 255, 255, .15);
   }
-  .nav-avatar { object-fit: cover; }
+
+  .nav-avatar {
+    object-fit: cover;
+  }
+
   .nav-avatar-ring,
   .nav-initials::before {
     content: "";
-    position: absolute; inset: -3px;
+    position: absolute;
+    inset: -3px;
     border-radius: 50%;
     background: conic-gradient(from 0deg, var(--nb-ring), transparent 60%, var(--nb-ring));
-    filter: blur(.6px); opacity: .55; z-index: -1;
+    filter: blur(.6px);
+    opacity: .55;
+    z-index: -1;
   }
-  .nav-initials { background: #64748b; }
+
+  .nav-initials {
+    background: #64748b;
+  }
+
   .dropdown-avatar,
   .dropdown-initials {
-    width: 58px; height: 58px; border-radius: 50%;
-    display: inline-flex; align-items: center; justify-content: center;
-    background: #64748b; color: #fff; font-weight: 800; font-size: 1.05rem;
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #64748b;
+    color: #fff;
+    font-weight: 800;
+    font-size: 1.05rem;
     box-shadow: 0 0 0 3px rgba(255, 255, 255, .12);
   }
-  .dropdown-avatar { object-fit: cover; background: #222; }
 
-  .badge.rounded-pill { font-weight: 600; }
+  .dropdown-avatar {
+    object-fit: cover;
+    background: #222;
+  }
 
-  .navbar-toggler { border-color: var(--nb-border) !important; }
-  .navbar-toggler:focus { box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .35); }
+  .badge.rounded-pill {
+    font-weight: 600;
+  }
 
-  .text-secondary { color: var(--nb-muted) !important; }
+  .navbar-toggler {
+    border-color: var(--nb-border) !important;
+  }
+
+  .navbar-toggler:focus {
+    box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .35);
+  }
+
+  .text-secondary {
+    color: var(--nb-muted) !important;
+  }
 
   /* 🔹 Ajustes extra en desktop: aún más compacto para pantallas grandes con muchos menús */
   @media (min-width: 992px) {
@@ -329,9 +385,18 @@ $nombreCorto = firstName($nombreUsuario);
       padding-left: .5rem;
       padding-right: .5rem;
     }
-    .navbar.pretty .navbar-brand { font-size: .95rem; }
-    .dropdown-menu-dark .dropdown-item { font-size: .86rem; }
-    .dropdown-menu-dark .dropdown-header { font-size: .70rem; }
+
+    .navbar.pretty .navbar-brand {
+      font-size: .95rem;
+    }
+
+    .dropdown-menu-dark .dropdown-item {
+      font-size: .86rem;
+    }
+
+    .dropdown-menu-dark .dropdown-header {
+      font-size: .70rem;
+    }
   }
 </style>
 
@@ -386,7 +451,9 @@ $nombreCorto = firstName($nombreUsuario);
                 <li><a class="dropdown-item<?= isActive(['venta_master_admin.php']) ?>" href="venta_master_admin.php"><i class="bi bi-shield-lock me-2"></i>Venta Master Admin</a></li>
               <?php endif; ?>
 
-              <li><hr class="dropdown-divider"></li>
+              <li>
+                <hr class="dropdown-divider">
+              </li>
 
               <!-- Sección: Historiales -->
               <li class="dropdown-header">Historiales</li>
@@ -417,7 +484,9 @@ $nombreCorto = firstName($nombreUsuario);
                 <li><a class="dropdown-item<?= isActive(['inventario_global.php']) ?>" href="inventario_global.php"><i class="bi bi-globe2 me-2"></i>Inventario global</a></li>
               <?php endif; ?>
               <?php if (in_array($rolUsuario, ['Admin', 'Super'])): ?>
-                <li><hr class="dropdown-divider"></li>
+                <li>
+                  <hr class="dropdown-divider">
+                </li>
                 <li class="dropdown-header">Administrador</li>
                 <li><a class="dropdown-item<?= isActive(['inventario_resumen.php']) ?>" href="inventario_resumen.php"><i class="bi bi-layout-text-window-reverse me-2"></i>Resumen Global</a></li>
                 <li><a class="dropdown-item<?= isActive(['inventario_central.php']) ?>" href="inventario_central.php"><i class="bi bi-buildings me-2"></i>Inventario Angelopolis</a></li>
@@ -436,7 +505,9 @@ $nombreCorto = firstName($nombreUsuario);
               <li><a class="dropdown-item<?= isActive(['compras_resumen.php']) ?>" href="compras_resumen.php"><i class="bi bi-journal-text me-2"></i>Resumen de compras</a></li>
               <li><a class="dropdown-item<?= isActive(['modelos.php']) ?>" href="modelos.php"><i class="bi bi-collection me-2"></i>Catálogo de modelos</a></li>
               <li><a class="dropdown-item<?= isActive(['proveedores.php']) ?>" href="proveedores.php"><i class="bi bi-truck me-2"></i>Proveedores</a></li>
-              <li><hr class="dropdown-divider"></li>
+              <li>
+                <hr class="dropdown-divider">
+              </li>
               <li><a class="dropdown-item<?= isActive(['compras_resumen.php']) ?>" href="compras_resumen.php?estado=Pendiente"><i class="bi bi-box-arrow-in-down me-2"></i>Ingreso a almacén (pendientes)</a></li>
               <li><a class="dropdown-item disabled" href="#" tabindex="-1" aria-disabled="true" title="Se accede desde el Resumen"><i class="bi bi-diagram-3 me-2"></i>compras_ingreso.php (directo)</a></li>
             </ul>
@@ -454,40 +525,104 @@ $nombreCorto = firstName($nombreUsuario);
             </a>
             <ul class="dropdown-menu dropdown-menu-dark">
               <?php if (in_array($rolUsuario, ['Admin', 'Super'])): ?>
-                <li><a class="dropdown-item<?= isActive(['generar_traspaso.php']) ?>" href="generar_traspaso.php"><i class="bi bi-building-gear me-2"></i>Generar traspaso desde Central</a></li>
+                <li>
+                  <a class="dropdown-item<?= isActive(['generar_traspaso.php']) ?>" href="generar_traspaso.php">
+                    <i class="bi bi-building-gear me-2"></i>Generar traspaso desde Central
+                  </a>
+                </li>
+                <li>
+                  <a class="dropdown-item<?= isActive(['traspaso_directo_ma.php']) ?>" href="traspaso_directo_ma.php">
+                    <i class="bi bi-sign-turn-right me-2"></i>Traspaso directo MA
+                  </a>
+                </li>
               <?php endif; ?>
-              <li><a class="dropdown-item<?= isActive(['generar_traspaso_sims.php']) ?>" href="generar_traspaso_sims.php"><i class="bi bi-sim me-2"></i>Generar traspaso SIMs</a></li>
-              <li><hr class="dropdown-divider"></li>
+
+              <li>
+                <a class="dropdown-item<?= isActive(['generar_traspaso_sims.php']) ?>" href="generar_traspaso_sims.php">
+                  <i class="bi bi-sim me-2"></i>Generar traspaso SIMs
+                </a>
+              </li>
+
+              <li>
+                <hr class="dropdown-divider">
+              </li>
               <li class="dropdown-header">SIMs</li>
-              <li><a class="dropdown-item<?= isActive(['traspasos_sims_pendientes.php']) ?>" href="traspasos_sims_pendientes.php"><i class="bi bi-hourglass-split me-2"></i>SIMs pendientes</a></li>
-              <li><a class="dropdown-item<?= isActive(['traspasos_sims_salientes.php']) ?>" href="traspasos_sims_salientes.php"><i class="bi bi-send me-2"></i>SIMs salientes</a></li>
+              <li>
+                <a class="dropdown-item<?= isActive(['traspasos_sims_pendientes.php']) ?>" href="traspasos_sims_pendientes.php">
+                  <i class="bi bi-hourglass-split me-2"></i>SIMs pendientes
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item<?= isActive(['traspasos_sims_salientes.php']) ?>" href="traspasos_sims_salientes.php">
+                  <i class="bi bi-send me-2"></i>SIMs salientes
+                </a>
+              </li>
+
               <?php if ($rolUsuario === 'Gerente'): ?>
-                <li><hr class="dropdown-divider"></li>
+                <li>
+                  <hr class="dropdown-divider">
+                </li>
                 <li class="dropdown-header">Equipos</li>
-                <li><a class="dropdown-item<?= isActive(['traspaso_nuevo.php']) ?>" href="traspaso_nuevo.php"><i class="bi bi-shuffle me-2"></i>Generar traspaso entre sucursales</a></li>
+                <li>
+                  <a class="dropdown-item<?= isActive(['traspaso_nuevo.php']) ?>" href="traspaso_nuevo.php">
+                    <i class="bi bi-shuffle me-2"></i>Generar traspaso entre sucursales
+                  </a>
+                </li>
               <?php endif; ?>
-              <li><hr class="dropdown-divider"></li>
+
+              <li>
+                <hr class="dropdown-divider">
+              </li>
               <li class="dropdown-header">Historial de equipos</li>
-              <li><a class="dropdown-item<?= isActive(['traspasos_pendientes.php']) ?>" href="traspasos_pendientes.php"><i class="bi bi-inboxes me-2"></i>Historial traspasos entrantes</a></li>
-              <li><a class="dropdown-item<?= isActive(['traspasos_salientes.php']) ?>" href="traspasos_salientes.php"><i class="bi bi-box-arrow-up-right me-2"></i>Historial traspasos salientes</a></li>
+              <li>
+                <a class="dropdown-item<?= isActive(['traspasos_pendientes.php']) ?>" href="traspasos_pendientes.php">
+                  <i class="bi bi-inboxes me-2"></i>Historial traspasos entrantes
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item<?= isActive(['traspasos_salientes.php']) ?>" href="traspasos_salientes.php">
+                  <i class="bi bi-box-arrow-up-right me-2"></i>Historial traspasos salientes
+                </a>
+              </li>
             </ul>
           </li>
         <?php endif; ?>
 
-        <!-- EFECTIVO (oculto para Logística) -->
-        <?php if ($rolUsuario !== 'Logistica'): ?>
+
+        <!-- EFECTIVO -->
+        <?php if ($rolUsuario === 'Admin'): ?>
+          <!-- Admin: SOLO Validar depósitos -->
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle<?= parentActive($grpEfectivo) ?>" href="#" role="button" data-bs-toggle="dropdown"><i class="bi bi-cash-coin me-1"></i>Efectivo</a>
+            <a class="nav-link dropdown-toggle<?= parentActive(['depositos.php']) ?>" href="#" role="button" data-bs-toggle="dropdown">
+              <i class="bi bi-cash-coin me-1"></i>Efectivo
+            </a>
+            <ul class="dropdown-menu dropdown-menu-dark">
+              <li>
+                <a class="dropdown-item<?= isActive(['depositos.php']) ?>" href="depositos.php">
+                  <i class="bi bi-clipboard-check me-2"></i>Validar depósitos
+                </a>
+              </li>
+            </ul>
+          </li>
+
+        <?php elseif ($rolUsuario !== 'Logistica'): ?>
+          <!-- Resto (no logística): menú completo como antes -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle<?= parentActive($grpEfectivo) ?>" href="#" role="button" data-bs-toggle="dropdown">
+              <i class="bi bi-cash-coin me-1"></i>Efectivo
+            </a>
             <ul class="dropdown-menu dropdown-menu-dark">
               <li><a class="dropdown-item<?= isActive(['cobros.php']) ?>" href="cobros.php"><i class="bi bi-qr-code-scan me-2"></i>Generar cobro</a></li>
               <li><a class="dropdown-item<?= isActive(['cortes_caja.php']) ?>" href="cortes_caja.php"><i class="bi bi-scissors me-2"></i>Historial Cortes</a></li>
               <li><a class="dropdown-item<?= isActive(['generar_corte.php']) ?>" href="generar_corte.php"><i class="bi bi-calendar2-week me-2"></i>Generar corte sucursal</a></li>
               <li><a class="dropdown-item<?= isActive(['depositos_sucursal.php']) ?>" href="depositos_sucursal.php"><i class="bi bi-bank me-2"></i>Depósitos sucursal</a></li>
-              <?php if (in_array($rolUsuario, ['Admin', 'Super'])): ?>
+              <?php if (in_array($rolUsuario, ['Super'])): /* <-- solo Super aquí */ ?>
                 <li><a class="dropdown-item<?= isActive(['depositos.php']) ?>" href="depositos.php"><i class="bi bi-clipboard-check me-2"></i>Validar depósitos</a></li>
               <?php endif; ?>
               <?php if ($rolUsuario === 'GerenteZona'): ?>
-                <li><hr class="dropdown-divider"></li>
+                <li>
+                  <hr class="dropdown-divider">
+                </li>
                 <li class="dropdown-header">Comisiones</li>
                 <li><a class="dropdown-item<?= isActive(['recoleccion_comisiones.php']) ?>" href="recoleccion_comisiones.php"><i class="bi bi-currency-dollar me-2"></i>Recolección comisiones</a></li>
               <?php endif; ?>
@@ -526,7 +661,9 @@ $nombreCorto = firstName($nombreUsuario);
               <?php endif; ?>
 
               <?php if (in_array($rolUsuario, ['Gerente', 'GerenteZona', 'GerenteSucursal', 'Admin', 'Super'])): ?>
-                <li><hr class="dropdown-divider"></li>
+                <li>
+                  <hr class="dropdown-divider">
+                </li>
                 <li class="dropdown-header">Mantenimiento</li>
                 <?php if (in_array($rolUsuario, ['Gerente', 'GerenteZona', 'GerenteSucursal'])): ?>
                   <li><a class="dropdown-item<?= isActive(['mantenimiento_solicitar.php']) ?>" href="mantenimiento_solicitar.php"><i class="bi bi-tools me-2"></i>Solicitar mantenimiento</a></li>
@@ -546,7 +683,9 @@ $nombreCorto = firstName($nombreUsuario);
             <ul class="dropdown-menu dropdown-menu-dark">
               <li><a class="dropdown-item<?= isActive(['reporte_nomina.php']) ?>" href="reporte_nomina.php"><i class="bi bi-journal-check me-2"></i>Reporte semanal</a></li>
               <li><a class="dropdown-item<?= isActive(['reporte_nomina_gerentes_zona.php']) ?>" href="reporte_nomina_gerentes_zona.php"><i class="bi bi-diagram-2 me-2"></i>Gerentes zona</a></li>
-              <li><hr class="dropdown-divider"></li>
+              <li>
+                <hr class="dropdown-divider">
+              </li>
               <li class="dropdown-header">Expedientes</li>
               <li><a class="dropdown-item<?= isActive(['admin_expedientes.php']) ?>" href="admin_expedientes.php"><i class="bi bi-folder-symlink me-2"></i>Panel de expedientes</a></li>
             </ul>
@@ -625,10 +764,14 @@ $nombreCorto = firstName($nombreUsuario);
                 <div class="text-secondary small">Rol: <?= e($rolUsuario) ?></div>
               </div>
             </li>
-            <li><hr class="dropdown-divider"></li>
+            <li>
+              <hr class="dropdown-divider">
+            </li>
             <li><a class="dropdown-item<?= isActive(['expediente_usuario.php']) ?>" href="expediente_usuario.php"><i class="bi bi-person-badge me-2"></i>Mi expediente</a></li>
             <li><a class="dropdown-item<?= isActive(['documentos_historial.php']) ?>" href="documentos_historial.php"><i class="bi bi-folder2-open me-2"></i>Mis documentos</a></li>
-            <li><hr class="dropdown-divider"></li>
+            <li>
+              <hr class="dropdown-divider">
+            </li>
             <li><a class="dropdown-item" href="logout.php"><i class="bi bi-box-arrow-right me-2"></i>Salir</a></li>
           </ul>
         </li>

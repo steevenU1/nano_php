@@ -1,6 +1,5 @@
 <?php
-// procesar_venta_master_admin.php (Nano) – con comision_master_admin
-
+// procesar_venta_master_admin.php (Nano) – con comision_master_admin (corregido)
 session_start();
 if (!isset($_SESSION['id_usuario'])) {
     header("Location: index.php");
@@ -8,9 +7,9 @@ if (!isset($_SESSION['id_usuario'])) {
 }
 
 include 'db.php';
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
-$idUsuario  = (int)($_SESSION['id_usuario'] ?? 0);
-$fechaVenta = date('Y-m-d H:i:s');
+$idUsuario = (int)($_SESSION['id_usuario'] ?? 0);
 
 /* =========================
    ENTRADAS DEL FORMULARIO
@@ -33,6 +32,19 @@ $financiera        = trim($_POST['financiera'] ?? 'N/A');           // ENUM
 
 $comentarios       = trim($_POST['comentarios'] ?? '');
 $origen_ma         = ($_POST['origen_ma'] ?? 'nano');               // 'nano' | 'propio'
+
+// Fecha (del form) o actual
+$fechaVentaForm    = trim($_POST['fecha_venta'] ?? '');
+if ($fechaVentaForm !== '') {
+    // llega como YYYY-MM-DDTHH:MM
+    $fechaVentaForm = str_replace('T', ' ', $fechaVentaForm);
+    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $fechaVentaForm)) {
+        $fechaVentaForm .= ':00';
+    }
+    $fechaVenta = $fechaVentaForm;
+} else {
+    $fechaVenta = date('Y-m-d H:i:s');
+}
 
 /* =========================
    NORMALIZACIONES/VALIDACIONES BÁSICAS
@@ -58,25 +70,84 @@ if ($origen_ma === 'nano') {
 }
 
 /* =========================
-   ENGANCHE TOTAL & COMISIÓN MA
+   ENGANCHE TOTAL
 ========================= */
-// Enganche total (si es mixto, suma; en otro caso usa 'enganche')
 $engancheTotal = ($formaPagoEng === 'Mixto')
     ? ($engancheEfectivo + $engancheTarjeta)
     : $enganche;
 
-// No permitir enganche mayor al precio de venta (sanidad)
 if ($engancheTotal < 0) $engancheTotal = 0;
 if ($engancheTotal > $precioVenta) $engancheTotal = $precioVenta;
 
-// Cálculo de comisión de Master Admin
-if ($origen_ma === 'nano') {
-    // precio - enganche - 10% de precio
-    $comisionMA = ($precioVenta * 0.90) - $engancheTotal;
-} else {
-    // comisión negativa del 10% del monto
-    $comisionMA = -($precioVenta * 0.10);
+/* =========================
+   CÁLCULO COMISIÓN MASTER ADMIN
+========================= */
+
+// Helper: obtener comision_ma a partir de un ID que puede ser de productos.id o inventario.id
+function obtenerComisionDesdeCualquierId(mysqli $conn, int $id): float {
+    if ($id <= 0) return 0.0;
+
+    // 1) intentar como productos.id
+    $stmt = $conn->prepare("SELECT comision_ma FROM productos WHERE id=? LIMIT 1");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $stmt->bind_result($cm);
+    if ($stmt->fetch()) {
+        $stmt->close();
+        return (float)$cm;
+    }
+    $stmt->close();
+
+    // 2) intentar como inventario.id -> productos
+    $stmt = $conn->prepare("
+        SELECT p.comision_ma
+        FROM inventario i
+        INNER JOIN productos p ON p.id = i.id_producto
+        WHERE i.id = ?
+        LIMIT 1
+    ");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $stmt->bind_result($cm2);
+    $val = 0.0;
+    if ($stmt->fetch()) $val = (float)$cm2;
+    $stmt->close();
+
+    return $val;
 }
+
+// Sumar comisiones si vienen como arreglo productos[]
+$comisionSumaProductos = 0.0;
+if (isset($_POST['productos']) && is_array($_POST['productos'])) {
+    foreach ($_POST['productos'] as $prod) {
+        $idProd = (int)($prod['id_producto'] ?? 0);
+        if ($idProd > 0) {
+            $stmt = $conn->prepare("SELECT comision_ma FROM productos WHERE id=? LIMIT 1");
+            $stmt->bind_param("i", $idProd);
+            $stmt->execute();
+            $stmt->bind_result($cm);
+            if ($stmt->fetch()) $comisionSumaProductos += (float)$cm;
+            $stmt->close();
+        }
+    }
+}
+
+// Fallback: si no vino el arreglo productos, intentar con selects equipo1/equipo2
+if ($comisionSumaProductos == 0.0) {
+    $equipo1 = (int)($_POST['equipo1'] ?? 0);
+    $equipo2 = (int)($_POST['equipo2'] ?? 0);
+    if ($equipo1 > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo1);
+    if ($equipo2 > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo2);
+}
+
+if ($origen_ma === 'nano') {
+    // Regla nueva: suma de productos.comision_ma - engancheTotal
+    $comisionMA = $comisionSumaProductos - $engancheTotal;
+} else {
+    // Origen propio: precio - enganche - 10%
+    $comisionMA = $precioVenta - $engancheTotal - ($precioVenta * 0.10);
+}
+
 $comisionMA = round($comisionMA, 2);
 
 /* =========================
@@ -95,7 +166,7 @@ if (!$stmt) {
     die("Error en prepare(): " . $conn->error);
 }
 
-/* Tipos de bind_param por orden:
+/* Tipos por orden:
    s s s s d d s d d i s i i s s s d
 */
 $stmt->bind_param(

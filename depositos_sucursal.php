@@ -1,6 +1,6 @@
 <?php
 session_start();
-if (!isset($_SESSION['id_usuario']) || !in_array($_SESSION['rol'], ['Gerente','Admin'])) {
+if (!isset($_SESSION['id_usuario']) || !in_array($_SESSION['rol'], ['Ejecutivo','Admin'])) {
     header("Location: 403.php"); exit();
 }
 

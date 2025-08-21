@@ -392,7 +392,7 @@ if ($histEnabled) {
     <div class="card-header">🕑 Historial de traspasos directos</div>
     <div class="card-body">
       <?php if (!$histEnabled): ?>
-        <div class="alert alert-info">ℹ️ El historial requiere las tablas <code>traspasos_directos</code> y <code>traspasos_directos_det</code>. Si aún no existen, la operación de traspaso funciona sin bitácora.</div>
+        <!-- <div class="alert alert-info">ℹ️ El historial requiere las tablas <code>traspasos_directos</code> y <code>traspasos_directos_det</code>. Si aún no existen, la operación de traspaso funciona sin bitácora.</div> -->
       <?php else: ?>
         <form class="row g-2 mb-3" method="GET">
           <div class="col-md-3">

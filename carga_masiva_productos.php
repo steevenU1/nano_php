@@ -1,430 +1,352 @@
 <?php
-// carga_masiva_productos.php (Nano)
-// Reglas Nano: si la Sucursal viene vacía, asignar por defecto "Almacen Angelopolis"
+// carga_masiva_productos.php — Carga masiva al inventario insertando en productos + inventario
+// Requiere rol Admin
 
 session_start();
-if (!isset($_SESSION['id_usuario']) || $_SESSION['rol'] != 'Admin') {
-    header("Location: 403.php");
-    exit();
+if (!isset($_SESSION['id_usuario']) || ($_SESSION['rol'] ?? '') !== 'Admin') {
+  header("Location: 403.php"); exit();
 }
 
-// Mostrar errores de PHP/Mysqli (útil en desarrollo)
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-include 'db.php';
+require_once __DIR__.'/db.php';
+require_once __DIR__.'/navbar.php';
 
-$msg = '';
-$alertType = 'info';
-$previewData = [];
-$reportLink = '';
-$insertadas = 0;
-$ignoradas  = 0;
-
-define('DEFAULT_SUCURSAL_NANO', 'Almacen Angelopolis');
-
-/*
-CSV ESPERADO (13 columnas):
-Codigo_Producto, Marca, Modelo, Color, Capacidad, IMEI1, IMEI2, Costo, Precio_Lista,
-Tipo_Producto, Fecha_Ingreso(YYYY-MM-DD|DD/MM/YYYY), Sucursal, Proveedor(opcional)
-*/
-
-// ---------- Utilidades ----------
-function normalizaNumero($v) {
-    $v = trim((string)$v);
-    if ($v === '') return null;
-    // 1.234,56 -> 1234.56
-    if (preg_match('/^\d{1,3}(\.\d{3})*,\d+$/', $v)) {
-        $v = str_replace('.', '', $v);
-        $v = str_replace(',', '.', $v);
-    } else {
-        // 1,234.56 -> 1234.56
-        $v = str_replace(',', '', $v);
-    }
-    return is_numeric($v) ? (float)$v : null;
+// ===== Helpers =====
+function esc($v){ return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8'); }
+function slug($s){
+  $s = mb_strtolower(trim((string)$s), 'UTF-8');
+  $s = strtr($s, ['á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u','ñ'=>'n']);
+  $s = preg_replace('/[^a-z0-9_]+/','_',$s);
+  return trim($s,'_');
+}
+function onlyDigits($s){ return preg_replace('/\D+/', '', (string)$s); }
+function numOrNull($v){
+  $v = trim((string)$v);
+  if ($v==='') return null;
+  if (preg_match('/^\d{1,3}(\.\d{3})*,\d+$/', $v)) { $v = str_replace('.','',$v); $v = str_replace(',', '.', $v); }
+  else { $v = str_replace(',', '', $v); }
+  return is_numeric($v) ? (float)$v : null;
+}
+function normDateOrNull($s){
+  $s = trim((string)$s);
+  if ($s==='') return null;
+  $s = str_replace(['.', '-'], '/', $s);
+  if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/', $s, $m)) {
+    $d=(int)$m[1]; $mo=(int)$m[2]; $y=(int)$m[3]; if ($y<100) $y+=2000;
+    return checkdate($mo,$d,$y) ? sprintf('%04d-%02d-%02d',$y,$mo,$d) : null;
+  }
+  if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $s, $m)) {
+    $y=(int)$m[1]; $mo=(int)$m[2]; $d=(int)$m[3];
+    return checkdate($mo,$d,$y) ? sprintf('%04d-%02d-%02d',$y,$mo,$d) : null;
+  }
+  $ts = strtotime($s); return $ts? date('Y-m-d',$ts) : null;
 }
 
-/**
- * Convierte varias entradas a 'YYYY-MM-DD'.
- * Acepta: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, YYYY/MM/DD.
- * Devuelve string YYYY-MM-DD o null si es inválida.
- */
-function normalizaFechaISO($s) {
-    $s = trim((string)$s);
-    if ($s === '') return null;
+// ===== Configuración de columnas soportadas (map por encabezado) =====
+$COLS = [
+  'codigo_producto','marca','modelo','color','ram','capacidad',
+  'imei1','imei2',
+  'costo','costo_con_iva','precio_lista','proveedor',
+  'descripcion','nombre_comercial','compania','financiera',
+  'fecha_lanzamiento',
+  'tipo_producto','subtipo','gama','ciclo_vida','abc','operador','resurtible',
+  // inventario
+  'fecha_ingreso','sucursal',
+];
 
-    // Reemplazos para unificar separadores
-    $s = str_replace('.', '/', $s);
-    $s = str_replace('-', '/', $s);
+// ===== Estados UI =====
+$msg=''; $alert='info'; $preview=[]; $reportLink=''; $insertadas=0; $ignoradas=0;
 
-    // DD/MM/YYYY (o D/M/YY)
-    if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/', $s, $m)) {
-        $d = (int)$m[1];
-        $mth = (int)$m[2];
-        $y = (int)$m[3];
-        if ($y < 100) $y += 2000; // 25 -> 2025
-        if (checkdate($mth, $d, $y)) {
-            return sprintf('%04d-%02d-%02d', $y, $mth, $d);
+// ===== Vista previa =====
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['action']??'')==='preview' && isset($_FILES['archivo'])) {
+  $fh = fopen($_FILES['archivo']['tmp_name'],'r');
+  if (!$fh) { $msg='❌ No se pudo abrir el CSV.'; $alert='danger'; }
+  else {
+    $hdr = fgetcsv($fh,0,',');
+    if (!$hdr) { $msg='❌ CSV sin encabezados.'; $alert='danger'; }
+    else {
+      $map = []; // idx -> colname estandarizado
+      foreach ($hdr as $i=>$h) { $k = slug($h); $map[$i] = $k; }
+
+      // Necesitamos al menos: codigo_producto, marca, modelo, sucursal, fecha_ingreso, costo, precio_lista, imei1
+      $need = ['codigo_producto','marca','modelo','sucursal','fecha_ingreso','costo','precio_lista','imei1'];
+      $have = array_values($map);
+      $missing = array_diff($need, $have);
+      if (!empty($missing)) {
+        $msg = '❌ Faltan encabezados requeridos: <code>'.esc(implode(', ',$missing)).'</code>';
+        $alert='danger';
+      } else {
+        // cache sucursales
+        $sucMap = [];
+        $q = $conn->query("SELECT id,nombre FROM sucursales");
+        if ($q) { while($r=$q->fetch_assoc()){ $sucMap[$r['nombre']] = (int)$r['id']; } }
+
+        $YES = ['si','sí','1','yes','true'];
+        $NO  = ['no','0','false'];
+        $TIPOS = ['equipo'=>'Equipo','modem'=>'Modem','accesorio'=>'Accesorio'];
+        $GAMAS = ['ultra baja','baja','media baja','media','media alta','alta','premium'];
+        $CICLO = ['nuevo'=>'Nuevo','linea'=>'Linea','fin de vida'=>'Fin de vida'];
+        $ABC   = ['a','b','c'];
+
+        $rownum = 1;
+        while(($row=fgetcsv($fh,0,','))!==false){
+          $rownum++;
+          if (count(array_filter($row,fn($x)=>trim((string)$x)!=''))===0) continue;
+
+          // arma registro base
+          $r = array_fill_keys($COLS, null);
+          foreach ($row as $i=>$val) {
+            $col = $map[$i] ?? null;
+            if ($col && in_array($col, $COLS, true)) $r[$col] = trim((string)$val);
+          }
+
+          // normalizaciones
+          $r['imei1'] = onlyDigits($r['imei1']);
+          $r['imei2'] = onlyDigits($r['imei2']);
+          $r['costo'] = numOrNull($r['costo']);
+          $r['costo_con_iva'] = numOrNull($r['costo_con_iva']);
+          $r['precio_lista'] = numOrNull($r['precio_lista']);
+          if ($r['costo_con_iva']===null && $r['costo']!==null) $r['costo_con_iva'] = $r['costo']; // fallback
+
+          $r['fecha_lanzamiento'] = normDateOrNull($r['fecha_lanzamiento']);
+          $r['fecha_ingreso']     = normDateOrNull($r['fecha_ingreso']) ?: date('Y-m-d');
+
+          // clasificaciones
+          $tp = mb_strtolower($r['tipo_producto']??'','UTF-8');
+          $r['tipo_producto'] = $TIPOS[$tp] ?? 'Equipo';
+
+          $gm = mb_strtolower($r['gama']??'','UTF-8');
+          $r['gama'] = in_array($gm,$GAMAS,true) ? ucfirst($gm) : null;
+
+          $cv = mb_strtolower($r['ciclo_vida']??'','UTF-8');
+          $r['ciclo_vida'] = $CICLO[$cv] ?? null;
+
+          $ab = mb_strtolower($r['abc']??'','UTF-8');
+          $r['abc'] = in_array($ab,$ABC,true) ? strtoupper($ab) : null;
+
+          $rs = mb_strtolower($r['resurtible']??'','UTF-8');
+          if ($rs!=='')       $r['resurtible'] = in_array($rs,$YES,true) ? 'Sí' : (in_array($rs,$NO,true) ? 'No' : null);
+          else                $r['resurtible'] = null;
+
+          // sucursal
+          $idSucursal = $sucMap[$r['sucursal']] ?? null;
+
+          // Validaciones
+          $estatus='OK'; $motivo='Listo';
+          if ($r['codigo_producto']===''){ $estatus='Ignorada'; $motivo='codigo_producto vacío'; }
+          if ($estatus==='OK' && !$idSucursal){ $estatus='Ignorada'; $motivo='Sucursal no encontrada'; }
+          if ($estatus==='OK' && !$r['imei1']) { $estatus='Ignorada'; $motivo='IMEI1 vacío'; }
+          if ($estatus==='OK' && $r['costo']===null){ $estatus='Ignorada'; $motivo='costo inválido'; }
+          if ($estatus==='OK' && $r['precio_lista']===null){ $estatus='Ignorada'; $motivo='precio_lista inválido'; }
+          // Duplicados por IMEI
+          if ($estatus==='OK'){
+            $st=$conn->prepare("SELECT id FROM productos WHERE imei1=? OR imei2=? LIMIT 1");
+            $chk = $r['imei2']!=='' ? $r['imei2'] : $r['imei1'];
+            $st->bind_param("ss",$r['imei1'],$chk);
+            $st->execute(); $st->store_result();
+            if($st->num_rows>0){ $estatus='Ignorada'; $motivo='IMEI duplicado'; }
+            $st->close();
+          }
+
+          $preview[] = [
+            'row' => $rownum,
+            'data'=> $r,
+            'id_sucursal'=>$idSucursal,
+            'estatus'=>$estatus,
+            'motivo'=>$motivo
+          ];
         }
-        return null;
+        fclose($fh);
+        if (empty($preview)) { $msg='No se encontraron filas con datos.'; $alert='warning'; }
+      }
     }
-
-    // YYYY/MM/DD
-    if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $s, $m)) {
-        $y = (int)$m[1];
-        $mth = (int)$m[2];
-        $d = (int)$m[3];
-        if (checkdate($mth, $d, $y)) {
-            return sprintf('%04d-%02d-%02d', $y, $mth, $d);
-        }
-        return null;
-    }
-
-    // Fallback: strtotime
-    $ts = strtotime($s);
-    if ($ts !== false) return date('Y-m-d', $ts);
-
-    return null;
+  }
 }
 
-/** Obtiene el id de sucursal por nombre (o null si no existe). */
-function getSucursalIdByName(mysqli $conn, string $nombre): ?int {
-    $nombre = trim($nombre);
-    if ($nombre === '') return null;
-    $stmt = $conn->prepare("SELECT id FROM sucursales WHERE nombre=? LIMIT 1");
-    $stmt->bind_param("s", $nombre);
-    $stmt->execute();
-    $res = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    return $res['id'] ?? null;
-}
+// ===== Confirmar e insertar =====
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['action']??'')==='insertar' && isset($_POST['blob'])) {
+  $items = json_decode(base64_decode($_POST['blob']), true);
 
-// ============================================
-// 🔹 Paso 1: Vista previa del CSV
-// ============================================
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'preview') && isset($_FILES['archivo'])) {
-    $archivoTmp = $_FILES['archivo']['tmp_name'];
-    if (($handle = fopen($archivoTmp, 'r')) !== FALSE) {
-        $fila = 0;
-        while (($data = fgetcsv($handle, 0, ",")) !== FALSE) {
-            $fila++;
-            if ($fila == 1) continue; // Saltar encabezado
+  $dir = __DIR__.'/tmp'; if(!is_dir($dir)) @mkdir($dir,0775,true);
+  $fname = 'reporte_carga_prod_'.date('Ymd_His').'.csv';
+  $fpath = $dir.'/'.$fname;
+  $out = fopen($fpath,'w');
+  fputcsv($out, ['codigo_producto','marca','modelo','color','ram','capacidad','imei1','imei2','sucursal','estatus_final','motivo']);
 
-            // Esperamos 13 columnas (la última es opcional)
-            list($codigo_producto, $marca, $modelo, $color, $capacidad, $imei1, $imei2, $costo, $precio_lista, $tipo_producto, $fecha_ingreso, $sucursal_nombre, $proveedor)
-                = array_pad($data, 13, '');
+  $conn->begin_transaction();
+  try{
+    foreach ($items as $it){
+      $r = $it['data']; $idSuc = $it['id_sucursal']; $final=$it['estatus']; $why=$it['motivo'];
 
-            $codigo_producto = trim($codigo_producto);
-            $marca           = trim($marca);
-            $modelo          = trim($modelo);
-            $color           = trim($color);
-            $capacidad       = trim($capacidad);
+      if ($final==='OK') {
+        // Insert a productos (TODOS los campos disponibles)
+        $sql = "INSERT INTO productos (
+          codigo_producto, marca, modelo, color, ram, capacidad,
+          imei1, imei2, costo, costo_con_iva, proveedor, precio_lista,
+          descripcion, nombre_comercial, compania, financiera, fecha_lanzamiento,
+          tipo_producto, subtipo, gama, ciclo_vida, abc, operador, resurtible
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        $st = $conn->prepare($sql);
+        $st->bind_param(
+          "ssssssssddsdssssssssssss",
+          $r['codigo_producto'], $r['marca'], $r['modelo'], $r['color'], $r['ram'], $r['capacidad'],
+          $r['imei1'], $r['imei2'], $r['costo'], $r['costo_con_iva'], $r['proveedor'], $r['precio_lista'],
+          $r['descripcion'], $r['nombre_comercial'], $r['compania'], $r['financiera'], $r['fecha_lanzamiento'],
+          $r['tipo_producto'], $r['subtipo'], $r['gama'], $r['ciclo_vida'], $r['abc'], $r['operador'], $r['resurtible']
+        );
 
-            // IMEIs solo dígitos
-            $imei1 = preg_replace('/\D+/', '', (string)$imei1);
-            $imei2 = preg_replace('/\D+/', '', (string)$imei2);
+        if ($st->execute()) {
+          $idProd = $st->insert_id;
+          $st->close();
 
-            $costo        = normalizaNumero($costo);
-            $precio_lista = normalizaNumero($precio_lista);
+          // Inventario
+          $sqlI = "INSERT INTO inventario (id_producto, id_sucursal, estatus, fecha_ingreso)
+                   VALUES (?, ?, 'Disponible', ?)";
+          $sti = $conn->prepare($sqlI);
+          $sti->bind_param("iis", $idProd, $idSuc, $r['fecha_ingreso']);
+          $sti->execute(); $sti->close();
 
-            $tipo_producto   = ucfirst(strtolower(trim($tipo_producto))) ?: 'Equipo';
-            if ($tipo_producto === 'Módem') $tipo_producto = 'Modem';
-            $sucursal_nombre = trim($sucursal_nombre);
-            $proveedor       = trim($proveedor);
-            if ($proveedor !== '') $proveedor = mb_substr($proveedor, 0, 120, 'UTF-8');
-
-            // Fecha → ISO
-            $fechaISO = normalizaFechaISO($fecha_ingreso);
-            if ($fechaISO === null) {
-                // Si viene vacía, usa hoy; si viene mal formada, la marcamos inválida
-                $fechaISO = ($fecha_ingreso === '') ? date('Y-m-d') : null;
-            }
-
-            // Tipos permitidos
-            $tipos_validos = ['Equipo','Modem','Accesorio'];
-            if (!in_array($tipo_producto, $tipos_validos)) {
-                $tipo_producto = 'Equipo';
-            }
-
-            // 🔹 Ajuste Nano: si sucursal está vacía -> Almacen Angelopolis
-            if ($sucursal_nombre === '') {
-                $sucursal_nombre = DEFAULT_SUCURSAL_NANO;
-            }
-
-            // Resolver id de sucursal
-            $idSucursal = getSucursalIdByName($conn, $sucursal_nombre);
-
-            $estatus = 'OK';
-            $motivo  = 'Listo para insertar';
-
-            if ($codigo_producto === '') {
-                $estatus = 'Ignorada';
-                $motivo  = 'codigo_producto vacío';
-            }
-            if (!$idSucursal) {
-                $estatus = 'Ignorada';
-                $motivo  = 'Sucursal no encontrada';
-            }
-            if ($fechaISO === null) {
-                $estatus = 'Ignorada';
-                $motivo  = 'Fecha_Ingreso inválida';
-            }
-            if (!$imei1) {
-                $estatus = 'Ignorada';
-                $motivo  = 'IMEI1 vacío';
-            } else {
-                // Duplicado por IMEI
-                $sqlDup = "SELECT id FROM productos WHERE TRIM(imei1)=? OR TRIM(imei2)=? LIMIT 1";
-                $stmt = $conn->prepare($sqlDup);
-                $imei2Check = ($imei2 !== '') ? $imei2 : $imei1; // evita null
-                $stmt->bind_param("ss", $imei1, $imei2Check);
-                $stmt->execute();
-                $stmt->store_result();
-                if ($stmt->num_rows > 0) {
-                    $estatus = 'Ignorada';
-                    $motivo  = 'Duplicado en base (IMEI)';
-                }
-                $stmt->close();
-            }
-
-            if ($estatus === 'OK' && $costo === null)        { $estatus='Ignorada'; $motivo='Costo inválido'; }
-            if ($estatus === 'OK' && $precio_lista === null) { $estatus='Ignorada'; $motivo='Precio_Lista inválido'; }
-
-            $previewData[] = [
-                'codigo_producto'=> $codigo_producto,
-                'marca'         => $marca,
-                'modelo'        => $modelo,
-                'color'         => $color,
-                'capacidad'     => $capacidad,
-                'imei1'         => $imei1,
-                'imei2'         => $imei2,
-                'costo'         => $costo,
-                'precio_lista'  => $precio_lista,
-                'tipo_producto' => $tipo_producto,
-                'fecha_ingreso' => $fechaISO ?: '',  // guardamos normalizada
-                'sucursal'      => $sucursal_nombre,
-                'id_sucursal'   => $idSucursal,
-                'proveedor'     => $proveedor,
-                'estatus'       => $estatus,
-                'motivo'        => $motivo
-            ];
-        }
-        fclose($handle);
-    } else {
-        $msg = "❌ Error al abrir el archivo CSV.";
-    }
-}
-
-// ============================================
-// 🔹 Paso 2: Confirmar e insertar (con notificación + link)
-// ============================================
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && (($_POST['action'] ?? '') === 'insertar') && isset($_POST['data'])) {
-    $data = json_decode(base64_decode($_POST['data']), true);
-
-    // CSV de resultados
-    $csvDir = __DIR__ . '/tmp';
-    if (!is_dir($csvDir)) { @mkdir($csvDir, 0775, true); }
-    $reportFile = 'reporte_carga_productos_' . date('Ymd_His') . '.csv';
-    $reportPath = $csvDir . '/' . $reportFile;
-
-    $output = fopen($reportPath, 'w');
-    fputcsv($output, ['codigo_producto','marca','modelo','color','capacidad','imei1','imei2','sucursal','proveedor','estatus_final','motivo']);
-
-    // Cache simple para no consultar la misma sucursal muchas veces
-    $sucursalCache = [];
-
-    foreach ($data as $prod) {
-        $estatusFinal = $prod['estatus'];
-        $motivo = $prod['motivo'];
-
-        // 🔒 Re-resolver id_sucursal por si viene null/0, forzando default Nano
-        $sucursalNombre = trim((string)($prod['sucursal'] ?? ''));
-        if ($sucursalNombre === '') {
-            $sucursalNombre = DEFAULT_SUCURSAL_NANO;
-        }
-
-        // Resolver id desde cache o DB
-        $idSucursal = (int)($prod['id_sucursal'] ?? 0);
-        if ($idSucursal <= 0) {
-            if (!isset($sucursalCache[$sucursalNombre])) {
-                $sucursalCache[$sucursalNombre] = getSucursalIdByName($conn, $sucursalNombre);
-            }
-            $idSucursal = (int)($sucursalCache[$sucursalNombre] ?? 0);
-        }
-
-        if ($prod['estatus'] === 'OK' && $idSucursal <= 0) {
-            // Si en esta fase sigue sin encontrarse la sucursal, no insertamos
-            $estatusFinal = 'Ignorada';
-            $motivo = 'Sucursal no encontrada (insert)';
-        }
-
-        if ($prod['estatus'] === 'OK' && $idSucursal > 0) {
-            $proveedor = isset($prod['proveedor']) && $prod['proveedor'] !== '' ? $prod['proveedor'] : null;
-
-            // Inserta en productos (incluye codigo_producto)
-            $sqlInsert = "INSERT INTO productos
-                (codigo_producto, marca, modelo, color, capacidad, imei1, imei2, costo, proveedor, precio_lista, tipo_producto)
-                VALUES (?,?,?,?,?,?,?, ?, ?, ?, ?)";
-            $stmt = $conn->prepare($sqlInsert);
-            $stmt->bind_param(
-                "sssssssdsds",
-                $prod['codigo_producto'], $prod['marca'], $prod['modelo'], $prod['color'], $prod['capacidad'],
-                $prod['imei1'], $prod['imei2'], $prod['costo'],
-                $proveedor,
-                $prod['precio_lista'], $prod['tipo_producto']
-            );
-
-            try {
-                if ($stmt->execute()) {
-                    $idProducto = $stmt->insert_id;
-
-                    // fecha_ingreso ya viene normalizada como YYYY-MM-DD
-                    $fechaIngreso = $prod['fecha_ingreso'] ?: date('Y-m-d');
-
-                    $stmtInv = $conn->prepare("INSERT INTO inventario (id_producto, id_sucursal, estatus, fecha_ingreso) VALUES (?, ?, 'Disponible', ?)");
-                    $stmtInv->bind_param("iis", $idProducto, $idSucursal, $fechaIngreso);
-                    $stmtInv->execute();
-                    $stmtInv->close();
-
-                    $estatusFinal = 'Insertada';
-                    $motivo = 'OK';
-                    $insertadas++;
-                } else {
-                    $estatusFinal = 'Ignorada';
-                    $motivo = 'Error en inserción';
-                    $ignoradas++;
-                }
-            } catch (mysqli_sql_exception $e) {
-                if ($e->getCode() == 1062) {
-                    $estatusFinal = 'Ignorada';
-                    $motivo = 'Duplicado (índice único BD)';
-                } else {
-                    $estatusFinal = 'Ignorada';
-                    $motivo = 'Error BD: ' . $e->getMessage();
-                }
-                $ignoradas++;
-            }
-            $stmt->close();
+          $final='Insertada'; $why='OK'; $insertadas++;
         } else {
-            $ignoradas++;
+          $final='Ignorada'; $why='Error al insertar producto'; $ignoradas++;
+          $st->close();
         }
+      } else {
+        $ignoradas++;
+      }
 
-        fputcsv($output, [
-            $prod['codigo_producto'],
-            $prod['marca'],
-            $prod['modelo'],
-            $prod['color'],
-            $prod['capacidad'],
-            $prod['imei1'],
-            $prod['imei2'],
-            $sucursalNombre,
-            $prod['proveedor'] ?? '',
-            $estatusFinal,
-            $motivo
-        ]);
+      fputcsv($out, [
+        $r['codigo_producto'],$r['marca'],$r['modelo'],$r['color'],$r['ram'],$r['capacidad'],
+        $r['imei1'],$r['imei2'],$r['sucursal'] ?? '', $final, $why
+      ]);
     }
-
-    fclose($output);
-
-    $alertType = 'success';
-    $msg = "✅ Carga completada. <b>$insertadas</b> insertadas, <b>$ignoradas</b> ignoradas. Descarga el reporte para detalles.";
-    $reportLink = 'tmp/' . $reportFile;
+    $conn->commit();
+    fclose($out);
+    $msg = "✅ Carga completada. <b>$insertadas</b> insertadas, <b>$ignoradas</b> ignoradas.";
+    $alert = 'success';
+    $reportLink = 'tmp/'.$fname;
+  } catch(Throwable $e){
+    $conn->rollback();
+    if (isset($out) && is_resource($out)) fclose($out);
+    $msg = "❌ Error transaccional: ".$e->getMessage();
+    $alert = 'danger';
+  }
 }
 ?>
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Carga Masiva de Productos</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <style>
-      body{background:#f8fafc}
-      h2{font-weight:700}
-      .card-header{font-weight:600}
-      .code-badge{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-    </style>
+  <meta charset="utf-8">
+  <title>Carga Masiva de Productos</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    body{background:#f8fafc}
+    .code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+  </style>
 </head>
 <body>
+<div class="container my-4">
+  <h3>📥 Carga masiva de Productos al Inventario</h3>
+  <p class="text-muted">El CSV debe incluir encabezados. Los nombres pueden ir en cualquier orden y sin respetar mayúsculas.</p>
 
-<?php include 'navbar.php'; ?>
+  <?php if($msg): ?>
+    <div class="alert alert-<?=esc($alert)?>">
+      <?=$msg?>
+      <?php if($reportLink): ?>
+        <div class="mt-2"><a class="btn btn-success btn-sm" href="<?=esc($reportLink)?>" download>⬇️ Descargar reporte CSV</a></div>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
 
-<div class="container mt-4">
-    <h2>📥 Carga Masiva de Productos al Inventario</h2>
-    <p>Sube un archivo <strong>CSV</strong> con 13 columnas (la última es opcional). La fecha puede venir como <code>YYYY-MM-DD</code> o <code>DD/MM/YYYY</code>.</p>
-    <pre class="code-badge">Codigo_Producto, Marca, Modelo, Color, Capacidad, IMEI1, IMEI2, Costo, Precio_Lista, Tipo_Producto, Fecha_Ingreso, Sucursal, Proveedor</pre>
-
-    <?php if($msg): ?>
-      <div class="alert alert-<?= htmlspecialchars($alertType) ?> shadow-sm" role="alert">
-        <?= $msg ?>
-        <?php if($reportLink): ?>
-          <div class="mt-2">
-            <a class="btn btn-success btn-sm" href="<?= htmlspecialchars($reportLink) ?>" download>⬇️ Descargar CSV de resultados</a>
+  <?php if(empty($preview) && ($_POST['action']??'')!=='insertar'): ?>
+    <div class="card shadow-sm">
+      <div class="card-header">Subir CSV</div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="preview">
+          <input type="file" name="archivo" accept=".csv,text/csv" class="form-control mb-3" required>
+          <button class="btn btn-primary">👀 Vista previa</button>
+        </form>
+        <div class="mt-3 small">
+          Encabezados soportados (orden libre):
+          <div class="code mt-1">
+            <?=esc(implode(', ',$COLS))?>
           </div>
-        <?php endif; ?>
+        </div>
       </div>
-    <?php endif; ?>
-
-    <?php if(empty($previewData) && (($reportLink==='') && (($_POST['action'] ?? '') !== 'insertar'))): ?>
-        <div class="card shadow mb-4">
-            <div class="card-header bg-dark text-white">Subir archivo CSV</div>
-            <div class="card-body">
-                <form method="POST" enctype="multipart/form-data">
-                    <input type="hidden" name="action" value="preview">
-                    <input type="file" name="archivo" accept=".csv" class="form-control mb-3" required>
-                    <button type="submit" class="btn btn-primary">👀 Vista Previa</button>
-                </form>
-            </div>
-        </div>
-    <?php elseif(!empty($previewData) && (($_POST['action'] ?? '') === 'preview')): ?>
-        <div class="card shadow p-3 mb-4 bg-white">
-            <h5>Vista Previa</h5>
-            <form method="POST">
-                <input type="hidden" name="action" value="insertar">
-                <input type="hidden" name="data" value='<?= base64_encode(json_encode($previewData)) ?>'>
-                <div class="table-responsive">
-                <table class="table table-bordered table-sm mt-3">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Código</th>
-                            <th>Marca</th>
-                            <th>Modelo</th>
-                            <th>Color</th>
-                            <th>Capacidad</th>
-                            <th>IMEI1</th>
-                            <th>IMEI2</th>
-                            <th>Fecha Ingreso</th>
-                            <th>Sucursal</th>
-                            <th>Proveedor</th>
-                            <th>Estatus</th>
-                            <th>Motivo</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach($previewData as $p): ?>
-                        <tr class="<?= $p['estatus']=='OK'?'':'table-warning' ?>">
-                            <td><?= htmlspecialchars($p['codigo_producto']) ?></td>
-                            <td><?= htmlspecialchars($p['marca']) ?></td>
-                            <td><?= htmlspecialchars($p['modelo']) ?></td>
-                            <td><?= htmlspecialchars($p['color']) ?></td>
-                            <td><?= htmlspecialchars($p['capacidad']) ?></td>
-                            <td><?= htmlspecialchars($p['imei1']) ?></td>
-                            <td><?= htmlspecialchars($p['imei2']) ?></td>
-                            <td><?= htmlspecialchars($p['fecha_ingreso']) ?></td>
-                            <td><?= htmlspecialchars($p['sucursal']) ?></td>
-                            <td><?= htmlspecialchars($p['proveedor'] ?? '') ?></td>
-                            <td><?= htmlspecialchars($p['estatus']) ?></td>
-                            <td><?= htmlspecialchars($p['motivo']) ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                </div>
-                <button type="submit" class="btn btn-success mt-3">✅ Confirmar (guardará y mostrará notificación)</button>
-            </form>
-        </div>
-    <?php endif; ?>
+    </div>
+  <?php else: ?>
+    <div class="card shadow-sm">
+      <div class="card-header">Vista previa</div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="action" value="insertar">
+          <input type="hidden" name="blob" value='<?=base64_encode(json_encode($preview))?>'>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>#</th>
+                  <th>Código</th>
+                  <th>Marca</th>
+                  <th>Modelo</th>
+                  <th>Color</th>
+                  <th>RAM</th>
+                  <th>Capacidad</th>
+                  <th>IMEI1</th>
+                  <th>IMEI2</th>
+                  <th>Sucursal</th>
+                  <th>Fecha ingreso</th>
+                  <th>$ Costo</th>
+                  <th>$ Lista</th>
+                  <th>Tipo</th>
+                  <th>Subtipo</th>
+                  <th>Gama</th>
+                  <th>Ciclo</th>
+                  <th>ABC</th>
+                  <th>Resurtible</th>
+                  <th>Estatus</th>
+                  <th>Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach($preview as $i=>$p): $d=$p['data']; ?>
+                  <tr class="<?=$p['estatus']==='OK'?'':'table-warning'?>">
+                    <td><?= (int)$p['row'] ?></td>
+                    <td><?= esc($d['codigo_producto']) ?></td>
+                    <td><?= esc($d['marca']) ?></td>
+                    <td><?= esc($d['modelo']) ?></td>
+                    <td><?= esc($d['color']) ?></td>
+                    <td><?= esc($d['ram']) ?></td>
+                    <td><?= esc($d['capacidad']) ?></td>
+                    <td><?= esc($d['imei1']) ?></td>
+                    <td><?= esc($d['imei2']) ?></td>
+                    <td><?= esc($d['sucursal']) ?></td>
+                    <td><?= esc($d['fecha_ingreso']) ?></td>
+                    <td><?= $d['costo']!==null?number_format((float)$d['costo'],2):'' ?></td>
+                    <td><?= $d['precio_lista']!==null?number_format((float)$d['precio_lista'],2):'' ?></td>
+                    <td><?= esc($d['tipo_producto']) ?></td>
+                    <td><?= esc($d['subtipo']) ?></td>
+                    <td><?= esc($d['gama']) ?></td>
+                    <td><?= esc($d['ciclo_vida']) ?></td>
+                    <td><?= esc($d['abc']) ?></td>
+                    <td><?= esc($d['resurtible']) ?></td>
+                    <td><?= esc($p['estatus']) ?></td>
+                    <td><?= esc($p['motivo']) ?></td>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+          <button class="btn btn-success">✅ Confirmar e insertar</button>
+          <a class="btn btn-outline-secondary" href="carga_masiva_productos.php">Cancelar</a>
+        </form>
+      </div>
+    </div>
+  <?php endif; ?>
 </div>
-
 </body>
 </html>

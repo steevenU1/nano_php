@@ -1,7 +1,14 @@
 <?php
 // compras_ingreso.php
 // Ingreso de unidades a inventario por renglón (captura IMEI y PRECIO DE LISTA por modelo)
-// Ajustado: RAM desde el detalle, SUBTIPO por renglón (no por IMEI) y mostrar último subtipo usado.
+// Copia atributos de catalogo_modelos a productos (nombre_comercial, descripcion, compania,
+// financiera, fecha_lanzamiento, tipo_producto, gama, ciclo_vida, abc, operador, resurtible, subtipo)
+// y muestra datos del catálogo en la UI.
+//
+// Reglas de "subtipo":
+// - Se sugiere "último subtipo usado" (por código o por marca+modelo+ram+capacidad)
+// - Si el usuario NO captura subtipo en el formulario, se usa el del catálogo (si existe)
+// - Si el usuario captura, se respeta lo capturado (override)
 
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
@@ -30,11 +37,15 @@ function parse_money($s) {
 }
 
 /** Sugerir precio de lista:
+ *  0) precio_lista del catálogo (si > 0)
  *  1) último por código
  *  2) último por marca+modelo+ram+capacidad
  *  3) costo + IVA
  */
-function sugerirPrecioLista(mysqli $conn, ?string $codigoProd, string $marca, string $modelo, string $ram, string $capacidad, float $costoConIva) {
+function sugerirPrecioLista(mysqli $conn, ?string $codigoProd, string $marca, string $modelo, string $ram, string $capacidad, float $costoConIva, ?float $precioCat) {
+  if ($precioCat !== null && $precioCat > 0) {
+    return ['precio'=>(float)$precioCat, 'fuente'=>'catálogo de modelos'];
+  }
   if ($codigoProd) {
     $q = $conn->prepare("SELECT precio_lista FROM productos
                          WHERE codigo_producto=? AND precio_lista IS NOT NULL AND precio_lista>0
@@ -61,16 +72,14 @@ function sugerirPrecioLista(mysqli $conn, ?string $codigoProd, string $marca, st
 function ultimoSubtipo(mysqli $conn, ?string $codigoProd, string $marca, string $modelo, string $ram, string $capacidad) {
   if ($codigoProd) {
     $q = $conn->prepare("SELECT subtipo FROM productos
-                         WHERE codigo_producto=? AND subtipo IS NOT NULL AND subtipo<>''
-                         ORDER BY id DESC LIMIT 1");
+                         WHERE codigo_producto=? AND subtipo IS NOT NULL AND subtipo<>'' ORDER BY id DESC LIMIT 1");
     $q->bind_param("s", $codigoProd);
     $q->execute(); $q->bind_result($st);
     if ($q->fetch()) { $q->close(); return ['subtipo'=>$st, 'fuente'=>'por código']; }
     $q->close();
   }
   $q2 = $conn->prepare("SELECT subtipo FROM productos
-                        WHERE marca=? AND modelo=? AND ram=? AND capacidad=? AND subtipo IS NOT NULL AND subtipo<>''
-                        ORDER BY id DESC LIMIT 1");
+                        WHERE marca=? AND modelo=? AND ram=? AND capacidad=? AND subtipo IS NOT NULL AND subtipo<>'' ORDER BY id DESC LIMIT 1");
   $q2->bind_param("ssss", $marca, $modelo, $ram, $capacidad);
   $q2->execute(); $q2->bind_result($st2);
   if ($q2->fetch()) { $q2->close(); return ['subtipo'=>$st2, 'fuente'=>'por modelo (RAM/cap)']; }
@@ -81,7 +90,7 @@ function ultimoSubtipo(mysqli $conn, ?string $codigoProd, string $marca, string 
 /* ============================
    Consultas base
 ============================ */
-// Encabezado de compra (trae sucursal y proveedor)
+// Encabezado de compra
 $enc = $conn->query("
   SELECT c.*, s.nombre AS sucursal_nombre, p.nombre AS proveedor_nombre
   FROM compras c
@@ -90,6 +99,7 @@ $enc = $conn->query("
   WHERE c.id=$compraId
 ")->fetch_assoc();
 
+// Detalle de compra
 $det = $conn->query("
   SELECT d.*
        , (SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id) AS ingresadas
@@ -99,39 +109,62 @@ $det = $conn->query("
 
 if (!$enc || !$det) die("Registro no encontrado.");
 
-$pendientes     = max(0, (int)$det['cantidad'] - (int)$det['ingresadas']);
-$requiereImei   = (int)$det['requiere_imei'] === 1;
-$proveedorCompra= trim((string)($enc['proveedor_nombre'] ?? ''));
+$pendientes      = max(0, (int)$det['cantidad'] - (int)$det['ingresadas']);
+$requiereImei    = (int)$det['requiere_imei'] === 1;
+$proveedorCompra = trim((string)($enc['proveedor_nombre'] ?? ''));
 if ($proveedorCompra !== '') { $proveedorCompra = mb_substr($proveedorCompra, 0, 120, 'UTF-8'); }
 
 /* ============================
    Precálculos por renglón
 ============================ */
-// Traer código del catálogo (si existe)
+// Traer catálogo del modelo (si existe)
 $codigoCat = null;
+$cat = [
+  'codigo_producto'=>null,'nombre_comercial'=>null,'descripcion'=>null,'compania'=>null,'financiera'=>null,
+  'fecha_lanzamiento'=>null,'precio_lista'=>null,'tipo_producto'=>null,'gama'=>null,'ciclo_vida'=>null,
+  'abc'=>null,'operador'=>null,'resurtible'=>null,'subtipo'=>null // ← incluimos subtipo del catálogo
+];
+
 if (!empty($det['id_modelo'])) {
-  $stm = $conn->prepare("SELECT codigo_producto FROM catalogo_modelos WHERE id=?");
+  $stm = $conn->prepare("
+    SELECT codigo_producto, nombre_comercial, descripcion, compania, financiera,
+           fecha_lanzamiento, precio_lista, tipo_producto, gama, ciclo_vida, abc, operador, resurtible,
+           subtipo
+    FROM catalogo_modelos WHERE id=?
+  ");
   $stm->bind_param("i", $det['id_modelo']);
-  $stm->execute(); $stm->bind_result($codigoCat); $stm->fetch(); $stm->close();
+  $stm->execute();
+  $stm->bind_result(
+    $cat['codigo_producto'], $cat['nombre_comercial'], $cat['descripcion'], $cat['compania'], $cat['financiera'],
+    $cat['fecha_lanzamiento'], $cat['precio_lista'], $cat['tipo_producto'], $cat['gama'], $cat['ciclo_vida'],
+    $cat['abc'], $cat['operador'], $cat['resurtible'],
+    $cat['subtipo']
+  );
+  if ($stm->fetch()) {
+    $codigoCat = $cat['codigo_producto'];
+  }
+  $stm->close();
 }
 
 // Costos del detalle
-$costo       = (float)$det['precio_unitario'];      // sin IVA
-$ivaPct      = (float)$det['iva_porcentaje'];       // %
+$costo       = (float)$det['precio_unitario']; // sin IVA
+$ivaPct      = (float)$det['iva_porcentaje'];  // %
 $costoConIva = round($costo * (1 + $ivaPct/100), 2);
 
 // Datos del detalle
 $marcaDet  = (string)$det['marca'];
 $modeloDet = (string)$det['modelo'];
-$ramDet    = (string)($det['ram'] ?? '');         // 🆕 RAM del renglón
+$ramDet    = (string)($det['ram'] ?? '');  // RAM por renglón
 $capDet    = (string)$det['capacidad'];
 $colorDet  = (string)$det['color'];
 
-// Sugerencias
-$sugerencia = sugerirPrecioLista($conn, $codigoCat, $marcaDet, $modeloDet, $ramDet, $capDet, $costoConIva);
+// Sugerencias (preferir precio_lista del catálogo si existe)
+$precioCat = isset($cat['precio_lista']) && $cat['precio_lista'] !== null ? (float)$cat['precio_lista'] : null;
+$sugerencia = sugerirPrecioLista($conn, $codigoCat, $marcaDet, $modeloDet, $ramDet, $capDet, $costoConIva, $precioCat);
 $precioSugerido = $sugerencia['precio'];
 $fuenteSugerido = $sugerencia['fuente'];
 
+// Último subtipo usado
 $ultimoST = ultimoSubtipo($conn, $codigoCat, $marcaDet, $modeloDet, $ramDet, $capDet);
 $subtipoUltimo = $ultimoST['subtipo'];
 $subtipoFuente = $ultimoST['fuente'];
@@ -144,7 +177,8 @@ if ($resST) { while ($r=$resST->fetch_assoc()) { $subtipos[] = $r['subtipo']; } 
 // Valores default de formulario
 $errorMsg = "";
 $precioListaForm = number_format($precioSugerido, 2, '.', '');
-$subtipoForm = $subtipoUltimo ?? '';  // 🆕 prellenar con último usado
+// Prioridad sugerida: último usado → catálogo → vacío
+$subtipoForm = $subtipoUltimo ?? ($cat['subtipo'] ?? '');
 
 /* ============================
    POST: guardar ingresos
@@ -161,8 +195,11 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $errorMsg = "Precio de lista inválido. Usa números, ejemplo: 3999.00";
   }
 
-  // Subtipo por renglón (opcional, pero lo normalizamos a máx 50 chars)
+  // Subtipo por renglón: si no se captura, usar el del catálogo
   $subtipoForm = mb_substr(trim((string)($_POST['subtipo'] ?? '')), 0, 50, 'UTF-8');
+  if ($subtipoForm === '') {
+    $subtipoForm = isset($cat['subtipo']) ? mb_substr((string)$cat['subtipo'], 0, 50, 'UTF-8') : null;
+  }
 
   if ($errorMsg === "") {
     $conn->begin_transaction();
@@ -205,21 +242,38 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
           if ($cdup2 > 0) throw new Exception("IMEI duplicado: $imei2");
         }
 
-        // Crear producto (una unidad) con RAM (del renglón) y SUBTIPO (de la línea)
+        // Variables catálogo (para insertar en productos)
+        $nombreComercial  = $cat['nombre_comercial'] ?? null;
+        $descripcion      = $cat['descripcion'] ?? null;
+        $compania         = $cat['compania'] ?? null;
+        $financiera       = $cat['financiera'] ?? null;
+        $fechaLanzamiento = $cat['fecha_lanzamiento'] ?? null;
+        $tipoProducto     = $cat['tipo_producto'] ?? null;
+        $gama             = $cat['gama'] ?? null;
+        $cicloVida        = $cat['ciclo_vida'] ?? null;
+        $abc              = $cat['abc'] ?? null;
+        $operador         = $cat['operador'] ?? null;
+        $resurtible       = $cat['resurtible'] ?? null;
+
+        // Crear producto (una unidad)
         $stmtP = $conn->prepare("
           INSERT INTO productos (
             codigo_producto, marca, modelo, color, ram, capacidad,
-            imei1, imei2, costo, costo_con_iva, proveedor, precio_lista, subtipo
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            imei1, imei2, costo, costo_con_iva, proveedor, precio_lista,
+            descripcion, nombre_comercial, compania, financiera, fecha_lanzamiento,
+            tipo_producto, subtipo, gama, ciclo_vida, abc, operador, resurtible
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $marca = $marcaDet; $modelo = $modeloDet; $color = $colorDet; $ram = $ramDet; $cap = $capDet;
         $prov  = ($proveedorCompra !== '') ? $proveedorCompra : null;
 
-        // tipos: 8*s + 2*d + 1*s + 1*d + 1*s  -> 'ssssssssddsds'
+        // Types: 1-8 s, 9-10 d, 11 s, 12 d, 13-24 s
         $stmtP->bind_param(
-          "ssssssssddsds",
+          "ssssssssddsdssssssssssss",
           $codigoCat, $marca, $modelo, $color, $ram, $cap,
-          $imei1, $imei2, $costo, $costoConIva, $prov, $precioListaCapturado, $subtipoForm
+          $imei1, $imei2, $costo, $costoConIva, $prov, $precioListaCapturado,
+          $descripcion, $nombreComercial, $compania, $financiera, $fechaLanzamiento,
+          $tipoProducto, $subtipoForm, $gama, $cicloVida, $abc, $operador, $resurtible
         );
         $stmtP->execute();
         $idProducto = $stmtP->insert_id;
@@ -266,6 +320,50 @@ include 'navbar.php';
     <strong>Proveedor (compra):</strong> <?= esc($proveedorCompra ?: '—') ?>
   </p>
 
+  <?php if (!empty($cat['codigo_producto']) || !empty($cat['nombre_comercial'])): ?>
+    <div class="alert alert-secondary py-2">
+      <?php if(!empty($cat['codigo_producto'])): ?>
+        <span class="me-3"><strong>Código:</strong> <?= esc($cat['codigo_producto']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['nombre_comercial'])): ?>
+        <span class="me-3"><strong>Nombre comercial:</strong> <?= esc($cat['nombre_comercial']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['compania'])): ?>
+        <span class="me-3"><strong>Compañía:</strong> <?= esc($cat['compania']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['financiera'])): ?>
+        <span class="me-3"><strong>Financiera:</strong> <?= esc($cat['financiera']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['tipo_producto'])): ?>
+        <span class="me-3"><strong>Tipo:</strong> <?= esc($cat['tipo_producto']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['gama'])): ?>
+        <span class="me-3"><strong>Gama:</strong> <?= esc($cat['gama']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['ciclo_vida'])): ?>
+        <span class="me-3"><strong>Ciclo de vida:</strong> <?= esc($cat['ciclo_vida']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['abc'])): ?>
+        <span class="me-3"><strong>ABC:</strong> <?= esc($cat['abc']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['operador'])): ?>
+        <span class="me-3"><strong>Operador:</strong> <?= esc($cat['operador']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['resurtible'])): ?>
+        <span class="me-3"><strong>Resurtible:</strong> <?= esc($cat['resurtible']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['subtipo'])): ?>
+        <span class="me-3"><strong>Subtipo (catálogo):</strong> <?= esc($cat['subtipo']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['fecha_lanzamiento'])): ?>
+        <span class="me-3"><strong>Lanzamiento:</strong> <?= esc($cat['fecha_lanzamiento']) ?></span>
+      <?php endif; ?>
+      <?php if(!empty($cat['descripcion'])): ?>
+        <div class="small text-muted mt-1"><?= esc($cat['descripcion']) ?></div>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
   <?php if (!empty($errorMsg)): ?>
     <div class="alert alert-danger"><?= esc($errorMsg) ?></div>
   <?php endif; ?>
@@ -292,7 +390,7 @@ include 'navbar.php';
                 class="form-control"
                 maxlength="50"
                 list="dlSubtipos"
-                placeholder="Ej. Telcel, Liberado, Kit, etc."
+                placeholder="Ej. Liberado, Telcel, Kit, etc."
                 value="<?= esc($subtipoForm) ?>"
               >
               <datalist id="dlSubtipos">
