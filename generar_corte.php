@@ -7,12 +7,34 @@ if (!isset($_SESSION['id_usuario']) || !in_array($_SESSION['rol'], ['Ejecutivo',
 
 require_once __DIR__ . '/db.php';
 
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
 $id_usuario  = (int)($_SESSION['id_usuario'] ?? 0);
 $id_sucursal = (int)($_SESSION['id_sucursal'] ?? 0);
 $fechaHoy    = date('Y-m-d');
 $msg = "";
 
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/* ===== (opcional) AUTO-CREATE: gastos_sucursal ===== */
+try {
+  $conn->query("
+    CREATE TABLE IF NOT EXISTS gastos_sucursal (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      id_sucursal INT NOT NULL,
+      id_usuario  INT NOT NULL,
+      fecha_gasto DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      categoria   VARCHAR(64) NOT NULL,
+      concepto    VARCHAR(255) NOT NULL,
+      monto       DECIMAL(12,2) NOT NULL DEFAULT 0,
+      observaciones TEXT NULL,
+      id_corte    INT NULL,
+      creado_en   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_gs_suc(fecha_gasto, id_sucursal),
+      INDEX idx_gs_corte(id_corte)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  ");
+} catch (Throwable $e) { /* noop */ }
 
 /* ===== 1) Días con cobros pendientes ===== */
 $sqlDiasPendientes = "
@@ -51,6 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
 
     $conn->begin_transaction();
     try {
+        /* Cobros pendientes del día */
         $stmt = $conn->prepare($sqlCobros);
         $stmt->bind_param("is", $id_sucursal, $fecha_operacion);
         $stmt->execute();
@@ -66,6 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
             exit();
         }
 
+        /* Totales de cobros */
         $total_efectivo = 0.0;
         $total_tarjeta  = 0.0;
         $total_comision_especial = 0.0;
@@ -74,23 +98,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
             $total_tarjeta           += (float)$c['monto_tarjeta'];
             $total_comision_especial += (float)$c['comision_especial'];
         }
-        $total_general = $total_efectivo + $total_tarjeta;
 
+        /* Gastos del día (no ligados) */
+        $stG = $conn->prepare("
+          SELECT IFNULL(SUM(monto),0) AS total_gastos
+          FROM gastos_sucursal
+          WHERE id_sucursal=? AND DATE(fecha_gasto)=? AND id_corte IS NULL
+          FOR UPDATE
+        ");
+        $stG->bind_param("is", $id_sucursal, $fecha_operacion);
+        $stG->execute();
+        $gRow = $stG->get_result()->fetch_assoc();
+        $stG->close();
+        $total_gastos_efectivo = (float)($gRow['total_gastos'] ?? 0.0);
+
+        /* Efectivo neto y total general */
+        $efectivo_neto = max(0.0, $total_efectivo - $total_gastos_efectivo);
+        $total_general = $efectivo_neto + $total_tarjeta;
+
+        /* Insertar CORTE con efectivo neto y observación */
+        $obs = "Gastos efectivo considerados en corte: $".number_format($total_gastos_efectivo,2);
         $stmtCorte = $conn->prepare("
           INSERT INTO cortes_caja
           (id_sucursal, id_usuario, fecha_operacion, fecha_corte, estado,
            total_efectivo, total_tarjeta, total_comision_especial, total_general,
            depositado, monto_depositado, observaciones)
-          VALUES (?, ?, ?, NOW(), 'Pendiente', ?, ?, ?, ?, 0, 0, '')
+          VALUES (?, ?, ?, NOW(), 'Pendiente', ?, ?, ?, ?, 0, 0, ?)
         ");
-        $stmtCorte->bind_param("iisdddd",
+        $stmtCorte->bind_param(
+            "iisdddds",
             $id_sucursal, $id_usuario, $fecha_operacion,
-            $total_efectivo, $total_tarjeta, $total_comision_especial, $total_general
+            $efectivo_neto, $total_tarjeta, $total_comision_especial, $total_general,
+            $obs
         );
         if (!$stmtCorte->execute()) throw new Exception("Error al insertar corte: ".$stmtCorte->error);
         $id_corte = $stmtCorte->insert_id;
         $stmtCorte->close();
 
+        /* Ligar COBROS al corte */
         $stmtUpd = $conn->prepare("
           UPDATE cobros
           SET id_corte = ?, corte_generado = 1
@@ -99,6 +144,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
         $stmtUpd->bind_param("iis", $id_corte, $id_sucursal, $fecha_operacion);
         if (!$stmtUpd->execute()) throw new Exception("Error al actualizar cobros: ".$stmtUpd->error);
         $stmtUpd->close();
+
+        /* Ligar GASTOS al corte */
+        $upG = $conn->prepare("
+          UPDATE gastos_sucursal
+          SET id_corte = ?
+          WHERE id_sucursal=? AND DATE(fecha_gasto)=? AND id_corte IS NULL
+        ");
+        $upG->bind_param("iis", $id_corte, $id_sucursal, $fecha_operacion);
+        $upG->execute();
+        $upG->close();
 
         $conn->commit();
 
@@ -119,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
 /* ===== 4) A partir de aquí ya podemos imprimir HTML / incluir navbar ===== */
 require_once __DIR__ . '/navbar.php';
 
-/* Cobros pendientes de la fecha seleccionada */
+/* Cobros pendientes de la fecha seleccionada (para lista) */
 $sqlCobrosPend = "
   SELECT c.*, u.nombre AS usuario
   FROM cobros c
@@ -138,6 +193,28 @@ $stmt->close();
 
 $hayCobros   = count($cobrosFecha) > 0;
 $btnDisabled = $hayCobros ? '' : 'disabled';
+
+/* === Totales para “tarjetita” (fecha seleccionada) === */
+$tot_efectivo = 0.0; $tot_tarjeta = 0.0; $tot_comision = 0.0;
+foreach ($cobrosFecha as $c) {
+  $tot_efectivo += (float)$c['monto_efectivo'];
+  $tot_tarjeta  += (float)$c['monto_tarjeta'];
+  $tot_comision += (float)$c['comision_especial'];
+}
+
+/* Gastos del día (no ligados aún) */
+$stG2 = $conn->prepare("
+  SELECT IFNULL(SUM(monto),0) AS total_gastos
+  FROM gastos_sucursal
+  WHERE id_sucursal=? AND DATE(fecha_gasto)=? AND id_corte IS NULL
+");
+$stG2->bind_param("is", $id_sucursal, $fechaSeleccionada);
+$stG2->execute();
+$g2 = $stG2->get_result()->fetch_assoc();
+$stG2->close();
+$tot_gastos = (float)($g2['total_gastos'] ?? 0.0);
+
+$efectivo_neto = max(0.0, $tot_efectivo - $tot_gastos);
 
 $desde = $_GET['desde'] ?? date('Y-m-01');
 $hasta = $_GET['hasta'] ?? date('Y-m-d');
@@ -168,6 +245,12 @@ if (!empty($_SESSION['flash_msg'])) {
   <meta charset="UTF-8">
   <title>Generar Corte de Caja</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    .card-soft{border:1px solid rgba(0,0,0,.06);border-radius:16px;box-shadow:0 8px 24px rgba(2,6,23,.06)}
+    .kpi{display:flex;flex-direction:column;gap:.25rem;padding:12px 14px;border-radius:12px;border:1px dashed #e5e7eb;background:#fafafa}
+    .kpi .lbl{font-size:.9rem;color:#64748b}
+    .kpi .val{font-weight:700}
+  </style>
 </head>
 <body class="bg-light">
 <div class="container mt-4">
@@ -175,12 +258,46 @@ if (!empty($_SESSION['flash_msg'])) {
   <h2>🧾 Generar Corte de Caja</h2>
   <?= $msg ?>
 
+  <!-- Tarjetita de validación previa -->
+  <div class="card card-soft p-3 mb-4">
+    <h5 class="mb-3">Resumen del día — <?= h($fechaSeleccionada) ?></h5>
+    <div class="row g-2">
+      <div class="col-12 col-md-3">
+        <div class="kpi">
+          <span class="lbl">Cobrado en efectivo</span>
+          <span class="val text-success">$<?= number_format($tot_efectivo,2) ?></span>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="kpi">
+          <span class="lbl">Cobrado con tarjeta</span>
+          <span class="val">$<?= number_format($tot_tarjeta,2) ?></span>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="kpi">
+          <span class="lbl">Gastos (efectivo) no ligados</span>
+          <span class="val text-danger">$<?= number_format($tot_gastos,2) ?></span>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="kpi">
+          <span class="lbl">Efectivo neto (efectivo − gastos)</span>
+          <span class="val text-primary">$<?= number_format($efectivo_neto,2) ?></span>
+        </div>
+      </div>
+    </div>
+    <div class="form-text mt-2">
+      <b>Nota:</b> Al generar el corte, se descontarán los gastos del efectivo y se ligarán al corte automáticamente.
+    </div>
+  </div>
+
   <div class="mb-3">
     <h5>Días pendientes de corte:</h5>
     <?php if (empty($pendientes)): ?>
       <div class="alert alert-info">No hay días pendientes.</div>
     <?php else: ?>
-      <ul>
+      <ul class="mb-0">
         <?php foreach ($pendientes as $f => $total): ?>
           <li><?= h($f) ?> → <?= (int)$total ?> cobros</li>
         <?php endforeach; ?>
@@ -199,7 +316,8 @@ if (!empty($_SESSION['flash_msg'])) {
       <button type="submit" class="btn btn-primary w-50"
               <?= $btnDisabled ?>
               title="<?= $hayCobros ? 'Generar corte' : 'No hay cobros en esta fecha' ?>"
-              onclick="return confirm('¿Confirmas generar el corte de caja para la fecha seleccionada?');">
+// IMPORTANT: Confirm dialog
+              onclick="return confirm('Se generará el corte con EFECTIVO NETO = efectivo menos gastos del día. ¿Confirmas?');">
         📤 Generar Corte
       </button>
     </div>

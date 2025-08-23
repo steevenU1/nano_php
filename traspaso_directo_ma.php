@@ -1,6 +1,6 @@
 <?php
-// traspaso_directo_ma.php
-// Admin lista inventario de "Almacen Angelopolis", arma carrito y mueve directo a sucursales Master Admin (sin aceptación)
+// traspaso_directo_ma.php (multi-origen → cualquier destino, sin aceptación)
+// Admin puede tomar productos del inventario de cualquier sucursal y moverlos directo a otra sucursal.
 
 session_start();
 if (!isset($_SESSION['id_usuario']) || ($_SESSION['rol'] ?? '') !== 'Admin') {
@@ -12,7 +12,8 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-include 'db.php';
+require_once __DIR__ . '/db.php';
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 // ==== helpers ====
 function tableExists(mysqli $conn, string $table) {
@@ -28,29 +29,17 @@ function columnExists(mysqli $conn, string $table, string $column) {
     $res = $conn->query($sql);
     return $res && $res->num_rows > 0;
 }
+function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
-$MSG = '';
-$TYPE = 'info';
-$resultados = [];
-$exitos = 0; $fallas = 0;
+// ==== Catálogos de sucursales ====
+$sucursales = [];
+$qSuc = $conn->query("SELECT id, nombre FROM sucursales ORDER BY nombre");
+while ($r = $qSuc->fetch_assoc()) { $sucursales[] = $r; }
+$qSuc && $qSuc->close();
 
-// === Config/Resolución de IDs ===
-$NOMBRE_FUENTE = 'Almacen Angelopolis';
-$stmtSrc = $conn->prepare("SELECT id FROM sucursales WHERE nombre=? LIMIT 1");
-$stmtSrc->bind_param("s", $NOMBRE_FUENTE);
-$stmtSrc->execute();
-$idFuente = ($stmtSrc->get_result()->fetch_assoc()['id'] ?? 0);
-$stmtSrc->close();
-
-if ($idFuente <= 0) {
-    die("<div style='padding:20px;font-family:system-ui'><b>ERROR:</b> No se encontró la sucursal fuente '<i>$NOMBRE_FUENTE</i>' en la tabla <code>sucursales</code>. Ajusta el nombre o crea la sucursal.</div>");
-}
-
-// Destinos Master Admin
-$masterAdmins = [];
-$qMA = $conn->query("SELECT id, nombre FROM sucursales WHERE subtipo='Master Admin' ORDER BY nombre");
-while ($r = $qMA->fetch_assoc()) { $masterAdmins[] = $r; }
-$qMA && $qMA->close();
+// Map id->nombre
+$mapSuc = [];
+foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 
 // Bitácora opcional
 $LOG_HDR = tableExists($conn, 'traspasos_directos');
@@ -59,40 +48,45 @@ $LOG_DET = tableExists($conn, 'traspasos_directos_det');
 // ¿Existe fecha_actualizacion?
 $HAS_FECHA_ACT = columnExists($conn, 'inventario', 'fecha_actualizacion');
 
+$MSG = '';
+$TYPE = 'info';
+$resultados = [];
+$exitos = 0; $fallas = 0;
+
 // ==== Ejecutar traspaso (carrito) ====
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover') {
     $destino = (int)($_POST['destino'] ?? 0);
     $cartIds = array_map('intval', $_POST['cart_ids'] ?? []);
 
-    // Validar destino está en MA
-    $destinoValido = false; $nombreDestino = '';
-    foreach ($masterAdmins as $s) { if ((int)$s['id'] === $destino) { $destinoValido = true; $nombreDestino = $s['nombre']; break; } }
+    $destinoValido = $destino > 0 && isset($mapSuc[$destino]);
+    $nombreDestino = $destinoValido ? ($mapSuc[$destino] ?? ('#'.$destino)) : '';
 
     if (!$destinoValido) {
-        $TYPE = 'danger'; $MSG = '❌ Selecciona una sucursal destino válida (Master Admin).';
+        $TYPE = 'danger'; $MSG = '❌ Selecciona una sucursal destino válida.';
     } elseif (empty($cartIds)) {
         $TYPE = 'warning'; $MSG = '⚠️ El carrito está vacío.';
     } else {
         $conn->begin_transaction();
 
-        // Crear encabezado log si hay tabla
+        // encabezado log
         $idLog = null;
         if ($LOG_HDR) {
             $stmtLog = $conn->prepare("INSERT INTO traspasos_directos (fecha, id_usuario, id_sucursal_destino, observaciones) VALUES (NOW(), ?, ?, ?)");
-            $obs = 'Traspaso directo desde '.$NOMBRE_FUENTE;
+            $obs = 'Traspaso directo multi-origen';
             $stmtLog->bind_param("iis", $_SESSION['id_usuario'], $destino, $obs);
             if ($stmtLog->execute()) $idLog = $stmtLog->insert_id;
             $stmtLog->close();
         }
 
+        // pieza por ID (sin origen fijo)
         $stmtGet = $conn->prepare("
-            SELECT i.id, i.id_sucursal, i.estatus, p.imei1, p.marca, p.modelo, p.color, p.capacidad
+            SELECT i.id, i.id_sucursal AS id_origen, i.estatus,
+                   p.imei1, p.marca, p.modelo, p.color, p.capacidad
             FROM inventario i
             INNER JOIN productos p ON p.id=i.id_producto
-            WHERE i.id=? AND i.id_sucursal=? AND i.estatus='Disponible'
+            WHERE i.id=? AND i.estatus='Disponible'
             LIMIT 1
         ");
-        // UPDATE dinámico según exista o no la columna fecha_actualizacion
         if ($HAS_FECHA_ACT) {
             $stmtUpd = $conn->prepare("UPDATE inventario SET id_sucursal=?, fecha_actualizacion=NOW() WHERE id=? AND estatus='Disponible'");
         } else {
@@ -105,7 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover
         }
 
         foreach ($cartIds as $idInv) {
-            $stmtGet->bind_param("ii", $idInv, $idFuente);
+            $stmtGet->bind_param("i", $idInv);
             $stmtGet->execute();
             $res = $stmtGet->get_result();
             $row = $res->fetch_assoc();
@@ -113,11 +107,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover
 
             if (!$row) {
                 $fallas++;
-                $resultados[] = ['id'=>$idInv, 'resultado'=>'FALLÓ', 'detalle'=>'No está Disponible o no pertenece al almacén'];
+                $resultados[] = ['id'=>$idInv, 'resultado'=>'FALLÓ', 'detalle'=>'No está Disponible o no existe'];
                 if ($stmtLogDet && $idLog) {
-                    $resu='FALLÓ'; $det='No está Disponible o no pertenece al almacén';
-                    $imeiTmp = '';
-                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idFuente, $destino, $imeiTmp, $resu, $det);
+                    $resu='FALLÓ'; $det='No está Disponible o no existe'; $imeiTmp=''; $origenTmp = null;
+                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $origenTmp, $destino, $imeiTmp, $resu, $det);
+                    $stmtLogDet->execute();
+                }
+                continue;
+            }
+
+            $idOrigen = (int)$row['id_origen'];
+            $nombreOrigen = $mapSuc[$idOrigen] ?? ('#'.$idOrigen);
+
+            if ($idOrigen === $destino) {
+                $fallas++;
+                $resultados[] = ['id'=>$idInv, 'resultado'=>'FALLÓ', 'detalle'=>'Origen = destino'];
+                if ($stmtLogDet && $idLog) {
+                    $resu='FALLÓ'; $det='Origen = destino';
+                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idOrigen, $destino, $row['imei1'], $resu, $det);
                     $stmtLogDet->execute();
                 }
                 continue;
@@ -126,10 +133,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover
             $stmtUpd->bind_param("ii", $destino, $idInv);
             if ($stmtUpd->execute() && $stmtUpd->affected_rows > 0) {
                 $exitos++;
-                $resultados[] = ['id'=>$idInv, 'resultado'=>'OK', 'detalle'=>"Movido a $nombreDestino (IMEI: ".$row['imei1'].")"];
+                $resultados[] = ['id'=>$idInv, 'resultado'=>'OK', 'detalle'=>"Movido de {$nombreOrigen} → {$nombreDestino} (IMEI: ".$row['imei1'].")"];
                 if ($stmtLogDet && $idLog) {
-                    $resu='OK'; $det="Movido a $nombreDestino";
-                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idFuente, $destino, $row['imei1'], $resu, $det);
+                    $resu='OK'; $det="Movido de {$nombreOrigen} → {$nombreDestino}";
+                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idOrigen, $destino, $row['imei1'], $resu, $det);
                     $stmtLogDet->execute();
                 }
             } else {
@@ -137,7 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover
                 $resultados[] = ['id'=>$idInv, 'resultado'=>'FALLÓ', 'detalle'=>'No se pudo actualizar inventario'];
                 if ($stmtLogDet && $idLog) {
                     $resu='FALLÓ'; $det='No se pudo actualizar inventario';
-                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idFuente, $destino, $row['imei1'], $resu, $det);
+                    $stmtLogDet->bind_param("iiiisss", $idLog, $idInv, $idOrigen, $destino, $row['imei1'], $resu, $det);
                     $stmtLogDet->execute();
                 }
             }
@@ -154,16 +161,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'mover
 }
 
 // ==== Listado (con buscador/paginación) ====
+// Filtro de origen (0 = todas)
+$origenSel = (int)($_GET['origen'] ?? 0);
+
 $porPagina = 200;
 $page = max(1, (int)($_GET['page'] ?? 1));
 $offset = ($page - 1) * $porPagina;
 
 $qtxt = trim($_GET['q'] ?? '');
 $params = [];
-$where = "i.id_sucursal=? AND i.estatus='Disponible'";
-$params[] = $idFuente;
+$where = "i.estatus='Disponible'";
+$types = "";
 
-$types = "i";
+if ($origenSel > 0) {
+    $where .= " AND i.id_sucursal=?";
+    $params[] = $origenSel;
+    $types .= "i";
+}
+
 if ($qtxt !== '') {
     $where .= " AND (p.marca LIKE ? OR p.modelo LIKE ? OR p.color LIKE ? OR p.capacidad LIKE ? OR p.imei1 LIKE ? OR p.imei2 LIKE ? OR p.codigo_producto LIKE ?)";
     for ($i=0; $i<7; $i++) { $params[] = "%$qtxt%"; }
@@ -175,16 +190,19 @@ $sqlCount = "SELECT COUNT(*) AS t
              INNER JOIN productos p ON p.id=i.id_producto
              WHERE $where";
 $stmtCount = $conn->prepare($sqlCount);
-$stmtCount->bind_param($types, ...$params);
+if ($types !== "") $stmtCount->bind_param($types, ...$params);
 $stmtCount->execute();
 $total = (int)($stmtCount->get_result()->fetch_assoc()['t'] ?? 0);
 $stmtCount->close();
 
 $totalPages = max(1, (int)ceil($total / $porPagina));
 
-$sqlList = "SELECT i.id AS id_inv, i.fecha_ingreso, p.codigo_producto, p.marca, p.modelo, p.color, p.capacidad, p.imei1, p.imei2
+$sqlList = "SELECT i.id AS id_inv, i.fecha_ingreso, i.id_sucursal,
+                   p.codigo_producto, p.marca, p.modelo, p.color, p.capacidad, p.imei1, p.imei2,
+                   s.nombre AS sucursal_origen
             FROM inventario i
             INNER JOIN productos p ON p.id=i.id_producto
+            LEFT JOIN sucursales s ON s.id=i.id_sucursal
             WHERE $where
             ORDER BY i.fecha_ingreso DESC, i.id DESC
             LIMIT ? OFFSET ?";
@@ -193,7 +211,11 @@ $bindTypes = $types . "ii";
 $paramsList = $params;
 $paramsList[] = $porPagina;
 $paramsList[] = $offset;
-$stmtList->bind_param($bindTypes, ...$paramsList);
+if ($types !== "") {
+    $stmtList->bind_param($bindTypes, ...$paramsList);
+} else {
+    $stmtList->bind_param("ii", $porPagina, $offset);
+}
 $stmtList->execute();
 $rs = $stmtList->get_result();
 $rows = [];
@@ -238,8 +260,8 @@ if ($histEnabled) {
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Traspaso directo desde <?= htmlspecialchars($NOMBRE_FUENTE) ?></title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<title>Traspaso directo (multi-origen → cualquier destino)</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
   body{background:#f8fafc}
   .card{border-radius:16px}
@@ -254,29 +276,39 @@ if ($histEnabled) {
 <?php include 'navbar.php'; ?>
 
 <div class="container my-4">
-  <h2 class="fw-bold">🚚 Traspaso directo desde <span class="text-primary"><?= htmlspecialchars($NOMBRE_FUENTE) ?></span></h2>
-  <p class="text-muted mb-3">Arma el <b>carrito</b> con equipos <b>Disponibles</b> y muévelos a una sucursal <em>Master Admin</em> (sin aceptación).</p>
+  <h2 class="fw-bold">🚚 Traspaso directo <small class="text-muted">multi-origen → cualquier destino</small></h2>
+  <p class="text-muted mb-3">Arma el <b>carrito</b> con equipos <b>Disponibles</b> (de una o varias sucursales) y muévelos <b>directo</b> a la sucursal destino (sin aceptación).</p>
 
   <?php if ($MSG): ?>
-    <div class="alert alert-<?= htmlspecialchars($TYPE) ?> shadow-sm"><?= $MSG ?></div>
+    <div class="alert alert-<?= h($TYPE) ?> shadow-sm"><?= $MSG ?></div>
   <?php endif; ?>
 
   <div class="row g-3">
     <div class="col-lg-8">
       <div class="card shadow-sm mb-3">
-        <div class="card-header bg-dark text-white">Inventario en <?= htmlspecialchars($NOMBRE_FUENTE) ?></div>
+        <div class="card-header bg-dark text-white">Inventario disponible</div>
         <div class="card-body">
-          <form class="row g-2" method="GET" action="">
-            <div class="col-md-6">
-              <input type="text" name="q" value="<?= htmlspecialchars($qtxt) ?>" class="form-control" placeholder="Buscar marca, modelo, color, capacidad, IMEI o código...">
+          <form class="row g-2" method="GET" action="" id="filtroForm">
+            <div class="col-md-4">
+              <label class="form-label mb-1">Origen</label>
+              <select name="origen" class="form-select" id="origenSelect">
+                <option value="0">— Todas las sucursales —</option>
+                <?php foreach ($sucursales as $s): ?>
+                  <option value="<?= (int)$s['id'] ?>" <?= $origenSel===(int)$s['id']?'selected':'' ?>><?= h($s['nombre']) ?></option>
+                <?php endforeach; ?>
+              </select>
             </div>
-            <div class="col-md-2">
+            <div class="col-md-4">
+              <label class="form-label mb-1">Buscar</label>
+              <input type="text" name="q" value="<?= h($qtxt) ?>" class="form-control" placeholder="Marca, modelo, color, capacidad, IMEI o código">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
               <button class="btn btn-outline-primary w-100" type="submit">🔎 Buscar</button>
             </div>
-            <div class="col-md-2">
+            <div class="col-md-2 d-flex align-items-end">
               <a class="btn btn-outline-secondary w-100" href="traspaso_directo_ma.php">Limpiar</a>
             </div>
-            <div class="col-md-2 text-end">
+            <div class="col-12 text-end">
               <span class="badge bg-secondary">Total: <?= number_format($total) ?></span>
             </div>
           </form>
@@ -286,6 +318,7 @@ if ($histEnabled) {
               <thead class="table-light">
                 <tr>
                   <th style="width:42px" class="text-center"><input type="checkbox" id="checkAll"></th>
+                  <th>Sucursal</th>
                   <th>Código</th>
                   <th>Marca</th>
                   <th>Modelo</th>
@@ -299,26 +332,29 @@ if ($histEnabled) {
               </thead>
               <tbody>
                 <?php if (empty($rows)): ?>
-                <tr><td colspan="10" class="text-center text-muted">No hay equipos disponibles que coincidan con el filtro.</td></tr>
+                <tr><td colspan="11" class="text-center text-muted">No hay equipos disponibles que coincidan con el filtro.</td></tr>
                 <?php else: foreach ($rows as $r): ?>
                 <tr data-id="<?= (int)$r['id_inv'] ?>"
-                    data-codigo="<?= htmlspecialchars($r['codigo_producto']) ?>"
-                    data-marca="<?= htmlspecialchars($r['marca']) ?>"
-                    data-modelo="<?= htmlspecialchars($r['modelo']) ?>"
-                    data-color="<?= htmlspecialchars($r['color']) ?>"
-                    data-capacidad="<?= htmlspecialchars($r['capacidad']) ?>"
-                    data-imei1="<?= htmlspecialchars($r['imei1']) ?>"
-                    data-imei2="<?= htmlspecialchars($r['imei2']) ?>"
-                    data-fecha="<?= htmlspecialchars($r['fecha_ingreso']) ?>">
+                    data-origen-id="<?= (int)$r['id_sucursal'] ?>"
+                    data-origen-nom="<?= h($r['sucursal_origen'] ?? '') ?>"
+                    data-codigo="<?= h($r['codigo_producto']) ?>"
+                    data-marca="<?= h($r['marca']) ?>"
+                    data-modelo="<?= h($r['modelo']) ?>"
+                    data-color="<?= h($r['color']) ?>"
+                    data-capacidad="<?= h($r['capacidad']) ?>"
+                    data-imei1="<?= h($r['imei1']) ?>"
+                    data-imei2="<?= h($r['imei2']) ?>"
+                    data-fecha="<?= h($r['fecha_ingreso']) ?>">
                   <td class="text-center"><input type="checkbox" class="row-check"></td>
-                  <td class="mono"><?= htmlspecialchars($r['codigo_producto']) ?></td>
-                  <td><?= htmlspecialchars($r['marca']) ?></td>
-                  <td><?= htmlspecialchars($r['modelo']) ?></td>
-                  <td><?= htmlspecialchars($r['color']) ?></td>
-                  <td><?= htmlspecialchars($r['capacidad']) ?></td>
-                  <td class="mono"><?= htmlspecialchars($r['imei1']) ?></td>
-                  <td class="mono"><?= htmlspecialchars($r['imei2']) ?></td>
-                  <td><?= htmlspecialchars($r['fecha_ingreso']) ?></td>
+                  <td class="mono"><?= h($r['sucursal_origen'] ?? '') ?></td>
+                  <td class="mono"><?= h($r['codigo_producto']) ?></td>
+                  <td><?= h($r['marca']) ?></td>
+                  <td><?= h($r['modelo']) ?></td>
+                  <td><?= h($r['color']) ?></td>
+                  <td><?= h($r['capacidad']) ?></td>
+                  <td class="mono"><?= h($r['imei1']) ?></td>
+                  <td class="mono"><?= h($r['imei2']) ?></td>
+                  <td><?= h($r['fecha_ingreso']) ?></td>
                   <td><button type="button" class="btn btn-sm btn-outline-primary add-one">➕</button></td>
                 </tr>
                 <?php endforeach; endif; ?>
@@ -329,7 +365,7 @@ if ($histEnabled) {
           <div class="d-flex justify-content-between align-items-center mt-2">
             <div class="text-muted small">Mostrando <?= count($rows) ?> de <?= number_format($total) ?></div>
             <?php if ($totalPages > 1):
-              $baseUrl = 'traspaso_directo_ma.php?q='.urlencode($qtxt).'&page=';
+              $baseUrl = 'traspaso_directo_ma.php?origen='.urlencode($origenSel).'&q='.urlencode($qtxt).'&page=';
               $prev = max(1, $page-1); $next = min($totalPages, $page+1);
             ?>
             <nav>
@@ -352,13 +388,14 @@ if ($histEnabled) {
         <div class="card-header bg-primary text-white">🛒 Carrito de traspaso <span class="badge bg-light text-dark ms-2" id="cart-count">0</span></div>
         <div class="card-body">
           <div class="mb-2 d-flex gap-2">
-            <button class="btn btn-outline-secondary btn-sm" id="add-selected">Agregar seleccionados</button>
-            <button class="btn btn-outline-danger btn-sm" id="clear-cart">Vaciar</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="add-selected">Agregar seleccionados</button>
+            <button type="button" class="btn btn-outline-danger btn-sm" id="clear-cart">Vaciar</button>
           </div>
           <div class="table-responsive" style="max-height:320px; overflow:auto">
             <table class="table table-sm table-bordered" id="cart-table">
               <thead class="table-light">
                 <tr>
+                  <th>Origen</th>
                   <th>Modelo</th>
                   <th>IMEI</th>
                   <th style="width:42px"></th>
@@ -372,11 +409,11 @@ if ($histEnabled) {
             <input type="hidden" name="accion" value="mover">
             <div id="cart-hidden"></div>
             <div class="mb-3">
-              <label class="form-label">Destino (Master Admin) <span class="text-danger">*</span></label>
+              <label class="form-label">Destino <span class="text-danger">*</span></label>
               <select name="destino" class="form-select" required>
                 <option value="">— Selecciona destino —</option>
-                <?php foreach ($masterAdmins as $s): ?>
-                  <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['nombre']) ?></option>
+                <?php foreach ($sucursales as $s): ?>
+                  <option value="<?= (int)$s['id'] ?>"><?= h($s['nombre']) ?></option>
                 <?php endforeach; ?>
               </select>
             </div>
@@ -387,67 +424,79 @@ if ($histEnabled) {
     </div>
   </div>
 
-  <!-- Historial -->
+  <?php if ($histEnabled): ?>
   <div class="card shadow-sm mt-4">
     <div class="card-header">🕑 Historial de traspasos directos</div>
     <div class="card-body">
-      <?php if (!$histEnabled): ?>
-        <!-- <div class="alert alert-info">ℹ️ El historial requiere las tablas <code>traspasos_directos</code> y <code>traspasos_directos_det</code>. Si aún no existen, la operación de traspaso funciona sin bitácora.</div> -->
-      <?php else: ?>
-        <form class="row g-2 mb-3" method="GET">
-          <div class="col-md-3">
-            <label class="form-label">Desde</label>
-            <input type="date" class="form-control" name="from" value="<?= htmlspecialchars($h_from) ?>">
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Hasta</label>
-            <input type="date" class="form-control" name="to" value="<?= htmlspecialchars($h_to) ?>">
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Destino</label>
-            <select class="form-select" name="dest">
-              <option value="0">Todos</option>
-              <?php foreach ($masterAdmins as $s): ?>
-                <option value="<?= (int)$s['id'] ?>" <?= $h_dest===(int)$s['id']?'selected':'' ?>><?= htmlspecialchars($s['nombre']) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-          <div class="col-md-2 d-flex align-items-end">
-            <button class="btn btn-outline-primary w-100" type="submit">Filtrar</button>
-          </div>
-        </form>
-
-        <div class="table-responsive">
-          <table class="table table-sm table-bordered align-middle">
-            <thead class="table-light">
-              <tr>
-                <th>ID</th>
-                <th>Fecha</th>
-                <th>Destino</th>
-                <th>Piezas</th>
-                <th>OK</th>
-                <th>Falló</th>
-              </tr>
-            </thead>
-            <tbody>
-              <?php if (empty($hist)): ?>
-                <tr><td colspan="6" class="text-center text-muted">Sin registros para el filtro.</td></tr>
-              <?php else: foreach ($hist as $h): ?>
-                <tr>
-                  <td class="mono"><?= (int)$h['id'] ?></td>
-                  <td><?= htmlspecialchars($h['fecha']) ?></td>
-                  <td><?= htmlspecialchars($h['destino'] ?? ('#'.$h['id_sucursal_destino'])) ?></td>
-                  <td><?= (int)$h['piezas'] ?></td>
-                  <td class="text-success"><?= (int)$h['ok_cnt'] ?></td>
-                  <td class="text-danger"><?= (int)$h['fail_cnt'] ?></td>
-                </tr>
-              <?php endforeach; endif; ?>
-            </tbody>
-          </table>
+      <form class="row g-2 mb-3" method="GET">
+        <div class="col-md-3">
+          <label class="form-label">Desde</label>
+          <input type="date" class="form-control" name="from" value="<?= h($h_from) ?>">
         </div>
-      <?php endif; ?>
+        <div class="col-md-3">
+          <label class="form-label">Hasta</label>
+          <input type="date" class="form-control" name="to" value="<?= h($h_to) ?>">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Destino</label>
+          <select class="form-select" name="dest">
+            <option value="0">Todos</option>
+            <?php foreach ($sucursales as $s): ?>
+              <option value="<?= (int)$s['id'] ?>" <?= $h_dest===(int)$s['id']?'selected':'' ?>><?= h($s['nombre']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button class="btn btn-outline-primary w-100" type="submit">Filtrar</button>
+        </div>
+      </form>
+
+      <?php
+      $whereH = "h.id = d.id_traspaso AND DATE(h.fecha) BETWEEN ? AND ?";
+      $tH = "ss";
+      $pH = [$h_from, $h_to];
+      if ($h_dest > 0) { $whereH .= " AND h.id_sucursal_destino=?"; $tH .= "i"; $pH[] = $h_dest; }
+
+      $sqlHist = "
+        SELECT h.id, h.fecha, h.id_sucursal_destino, s.nombre AS destino, COUNT(d.id) AS piezas,
+               SUM(d.resultado='OK') AS ok_cnt, SUM(d.resultado='FALLÓ') AS fail_cnt
+        FROM traspasos_directos h
+        JOIN traspasos_directos_det d ON d.id_traspaso=h.id
+        LEFT JOIN sucursales s ON s.id=h.id_sucursal_destino
+        WHERE $whereH
+        GROUP BY h.id, h.fecha, h.id_sucursal_destino, s.nombre
+        ORDER BY h.fecha DESC, h.id DESC
+        LIMIT 300
+      ";
+      $stmtH = $conn->prepare($sqlHist);
+      $stmtH->bind_param($tH, ...$pH);
+      $stmtH->execute();
+      $resH = $stmtH->get_result();
+      ?>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered align-middle">
+          <thead class="table-light">
+            <tr><th>ID</th><th>Fecha</th><th>Destino</th><th>Piezas</th><th>OK</th><th>Falló</th></tr>
+          </thead>
+          <tbody>
+          <?php if ($resH->num_rows === 0): ?>
+            <tr><td colspan="6" class="text-center text-muted">Sin registros para el filtro.</td></tr>
+          <?php else: while ($hrow = $resH->fetch_assoc()): ?>
+            <tr>
+              <td class="mono"><?= (int)$hrow['id'] ?></td>
+              <td><?= h($hrow['fecha']) ?></td>
+              <td><?= h($hrow['destino'] ?? ('#'.$hrow['id_sucursal_destino'])) ?></td>
+              <td><?= (int)$hrow['piezas'] ?></td>
+              <td class="text-success"><?= (int)$hrow['ok_cnt'] ?></td>
+              <td class="text-danger"><?= (int)$hrow['fail_cnt'] ?></td>
+            </tr>
+          <?php endwhile; endif; $stmtH->close(); ?>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
+  <?php endif; ?>
 
   <?php if (!empty($resultados)): ?>
     <div class="card shadow-sm mt-3">
@@ -459,9 +508,9 @@ if ($histEnabled) {
             <tbody>
               <?php foreach ($resultados as $r): ?>
               <tr class="<?= $r['resultado']==='OK' ? 'table-success' : 'table-danger' ?>">
-                <td class="mono"><?= htmlspecialchars($r['id']) ?></td>
-                <td><?= htmlspecialchars($r['resultado']) ?></td>
-                <td><?= htmlspecialchars($r['detalle']) ?></td>
+                <td class="mono"><?= h($r['id']) ?></td>
+                <td><?= h($r['resultado']) ?></td>
+                <td><?= h($r['detalle']) ?></td>
               </tr>
               <?php endforeach; ?>
             </tbody>
@@ -474,8 +523,14 @@ if ($histEnabled) {
 </div>
 
 <script>
+// ===== UX: auto-filtrar por Origen al cambiar =====
+const origenSelect = document.getElementById('origenSelect');
+if (origenSelect) origenSelect.addEventListener('change', () => {
+  document.getElementById('filtroForm').submit();
+});
+
 // ===== Carrito simple (en memoria) =====
-const cart = new Map(); // key: id_inv -> item {id, modelo, imei}
+const cart = new Map(); // key: id_inv -> item {id, origenId, origenNom, marca, modelo, capacidad, imei1}
 const cartTableBody = document.querySelector('#cart-table tbody');
 const cartHidden = document.getElementById('cart-hidden');
 const cartCount = document.getElementById('cart-count');
@@ -487,6 +542,7 @@ function updateCartUI() {
   for (const [id, it] of cart.entries()) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td class="mono">${escapeHtml(it.origenNom||'')}</td>
       <td>${escapeHtml(it.marca)} ${escapeHtml(it.modelo)} ${escapeHtml(it.capacidad||'')}</td>
       <td class="mono">${escapeHtml(it.imei1||'')}</td>
       <td><button type="button" class="btn btn-sm btn-outline-danger rm" data-id="${id}">✖</button></td>
@@ -507,6 +563,8 @@ function escapeHtml(s){ return (s??'').replace(/[&<>"']/g, m => ({'&':'&amp;','<
 function rowToItem(tr) {
   return {
     id: parseInt(tr.dataset.id),
+    origenId: parseInt(tr.dataset.origenId),
+    origenNom: tr.dataset.origenNom || '',
     marca: tr.dataset.marca,
     modelo: tr.dataset.modelo,
     capacidad: tr.dataset.capacidad,
@@ -514,41 +572,62 @@ function rowToItem(tr) {
   };
 }
 
-document.querySelectorAll('.add-one').forEach(btn=>{
-  btn.addEventListener('click', e=>{
-    const tr = e.target.closest('tr');
+// Delegación: botón ➕ dentro de la tabla
+const tablaInv = document.getElementById('tabla-inv');
+if (tablaInv) {
+  tablaInv.addEventListener('click', (e) => {
+    const btn = e.target.closest('.add-one');
+    if (!btn) return;
+    e.preventDefault();
+    const tr = btn.closest('tr');
+    if (!tr) return;
     const it = rowToItem(tr);
     cart.set(it.id, it);
     updateCartUI();
   });
-});
+}
 
-document.getElementById('add-selected').addEventListener('click', ()=>{
-  document.querySelectorAll('.row-check:checked').forEach(chk=>{
+// Agregar seleccionados
+const addSelectedBtn = document.getElementById('add-selected');
+if (addSelectedBtn) addSelectedBtn.addEventListener('click', (e)=>{
+  e.preventDefault();
+  document.querySelectorAll('input.row-check:checked').forEach(chk=>{
     const tr = chk.closest('tr');
+    if (!tr) return;
     const it = rowToItem(tr);
     cart.set(it.id, it);
   });
   updateCartUI();
 });
 
-document.getElementById('clear-cart').addEventListener('click', ()=>{
-  cart.clear(); updateCartUI();
+// Vaciar
+const clearBtn = document.getElementById('clear-cart');
+if (clearBtn) clearBtn.addEventListener('click', (e)=>{
+  e.preventDefault();
+  cart.clear();
+  updateCartUI();
 });
 
+// Quitar una línea del carrito (delegación)
 cartTableBody.addEventListener('click', e=>{
-  if (e.target.classList.contains('rm')) {
-    const id = parseInt(e.target.dataset.id);
-    cart.delete(id); updateCartUI();
-  }
+  const rm = e.target.closest('.rm');
+  if (!rm) return;
+  e.preventDefault();
+  const id = parseInt(rm.dataset.id);
+  cart.delete(id);
+  updateCartUI();
 });
 
+// Check all
 const checkAll = document.getElementById('checkAll');
 if (checkAll) {
   checkAll.addEventListener('change', () => {
-    document.querySelectorAll('.row-check').forEach(chk => chk.checked = checkAll.checked);
+    document.querySelectorAll('input.row-check').forEach(chk => chk.checked = checkAll.checked);
   });
 }
+
+// Conteo inicial
+updateCartUI();
 </script>
 </body>
 </html>
