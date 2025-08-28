@@ -33,6 +33,7 @@ $finSemana    = $finObj->format('Y-m-d');
 
 /* ==============================
    Ejecutivos (solo Propias)
+   FIX: combo -> 2 solo en MIN(dv.id); demás dv=0
 ================================= */
 $sqlEjecutivos = "
     SELECT 
@@ -52,9 +53,11 @@ $sqlEjecutivos = "
             CASE 
                 WHEN dv.id IS NULL THEN 0
                 WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
-                     AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id)
-                     THEN 2
+                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                    CASE 
+                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN 2
+                      ELSE 0
+                    END
                 ELSE 1
             END
         ),0) AS unidades,
@@ -87,6 +90,7 @@ $top3Ejecutivos = array_slice(array_column($rankingEjecutivos, 'id'), 0, 3);
 
 /* ==============================
    Sucursales (Propias)
+   FIX: combo -> 2 solo en MIN(dv.id); demás dv=0
 ================================= */
 $sqlSucursalesPropias = "
     SELECT s.id AS id_sucursal,
@@ -102,9 +106,11 @@ $sqlSucursalesPropias = "
                 CASE 
                     WHEN dv.id IS NULL THEN 0
                     WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
-                         AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id)
-                         THEN 2
+                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                        CASE 
+                          WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN 2
+                          ELSE 0
+                        END
                     ELSE 1
                 END
            ),0) AS unidades,
@@ -146,6 +152,7 @@ $porcentajeGlobalPropias = $totalCuotaPropias>0 ? ($totalVentasPropias/$totalCuo
 
 /* ==============================
    Sucursales (Master Admin) — SIN cuota
+   (esta ya tenía el patrón anti-duplicado para 'nano' en monto; lo replicamos en unidades)
 ================================= */
 $sqlSucursalesMA = "
     SELECT 
@@ -153,7 +160,7 @@ $sqlSucursalesMA = "
         s.nombre AS sucursal,
         s.subtipo AS subtipo,
 
-        -- Unidades
+        -- Unidades (FIX nano: una sola vez por venta)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
@@ -174,7 +181,7 @@ $sqlSucursalesMA = "
             END
         ),0) AS unidades,
 
-        -- Monto
+        -- Monto (ya con anti-duplicado nano)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
@@ -221,8 +228,7 @@ while ($row = $resSucursalesMA->fetch_assoc()) {
 /* ==========================================================
    Serie semanal (mar–lun) por sucursal — SOLO FILTRO DEL GRÁFICO
    g=propias | ma | todas
-   - MA con origen_ma='nano' cuenta por venta (1 ó 2 si F+Combo)
-   - Resto cuenta por detalle_venta excluyendo modem/mifi
+   FIX: mismo criterio anti-duplicado para combos y nano
 ========================================================== */
 $g = $_GET['g'] ?? 'todas';
 
@@ -244,8 +250,8 @@ if ($g === 'propias') {
     $whereBase .= " AND s.subtipo='Master Admin'";
 }
 
-// Query semanal con reglas por grupo
 if ($g === 'ma') {
+    // MA: nano cuenta por venta (MIN dv) y combo=2 una sola vez
     $sqlWeek = "
     SELECT s.id AS id_sucursal, s.nombre AS sucursal,
            DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
@@ -254,8 +260,11 @@ if ($g === 'ma') {
                WHEN v.id IS NULL THEN 0
                WHEN COALESCE(v.origen_ma,'propio')='nano' THEN
                     CASE
-                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2
-                      ELSE 1
+                      WHEN dv.id IS NULL THEN
+                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN
+                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                      ELSE 0
                     END
                ELSE
                     CASE
@@ -275,6 +284,7 @@ if ($g === 'ma') {
     GROUP BY s.id, dia
     ";
 } elseif ($g === 'propias') {
+    // Propias: combo=2 solo en MIN(dv), resto 0
     $sqlWeek = "
     SELECT s.id AS id_sucursal, s.nombre AS sucursal,
            DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
@@ -282,9 +292,11 @@ if ($g === 'ma') {
              CASE 
                WHEN dv.id IS NULL THEN 0
                WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-               WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
-                    AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
-                    THEN 2
+               WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                    CASE 
+                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
+                      ELSE 0
+                    END
                ELSE 1
              END
            ) AS unidades
@@ -298,6 +310,7 @@ if ($g === 'ma') {
     GROUP BY s.id, dia
     ";
 } else { // todas
+    // Mezcla: MA nano por venta; resto como Propias (combo=2 solo en MIN)
     $sqlWeek = "
     SELECT s.id AS id_sucursal, s.nombre AS sucursal,
            DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
@@ -306,16 +319,21 @@ if ($g === 'ma') {
                WHEN v.id IS NULL THEN 0
                WHEN s.subtipo='Master Admin' AND COALESCE(v.origen_ma,'propio')='nano' THEN
                     CASE
-                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2
-                      ELSE 1
+                      WHEN dv.id IS NULL THEN
+                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN
+                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                      ELSE 0
                     END
                ELSE
                     CASE
                       WHEN dv.id IS NULL THEN 0
                       WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo'
-                           AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
-                           THEN 2
+                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                           CASE 
+                             WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
+                             ELSE 0
+                           END
                       ELSE 1
                     END
              END
@@ -348,6 +366,16 @@ while ($r = $resW->fetch_assoc()) {
     }
 }
 $datasetsWeek = [];
+// labels de la semana
+$labelsSemanaISO = [];
+$labelsSemanaVis = [];
+$diasES = [1=>'Lun','Mar','Mié','Jue','Vie','Sáb','Dom']; // 1=Lun ... 7=Dom
+$cur = clone $inicioObj;
+for ($i=0; $i<7; $i++) {
+    $labelsSemanaISO[] = $cur->format('Y-m-d');
+    $labelsSemanaVis[] = $diasES[(int)$cur->format('N')] . ' ' . $cur->format('d/m');
+    $cur->modify('+1 day');
+}
 foreach ($weekSeries as $sucursalNombre => $serie) {
     $row = [];
     foreach ($labelsSemanaISO as $d) {
@@ -390,6 +418,7 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
         </select>
 
         <!-- Filtro SOLO para el gráfico -->
+        <?php $g = $_GET['g'] ?? 'todas'; ?>
         <label class="me-2"><strong>Gráfico:</strong></label>
         <select name="g" class="form-select w-auto d-inline-block me-2" onchange="this.form.submit()">
             <option value="todas"   <?= $g==='todas'?'selected':'' ?>>Todas</option>

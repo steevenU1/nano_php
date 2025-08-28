@@ -100,7 +100,7 @@ function comisionPospagoGerente(mysqli $conn, float $planMonto, string $modalida
 }
 
 /* ========================
-   USUARIOS (Gerentes + Ejecutivos)
+   USUARIOS
 ======================== */
 $sqlUsuarios = "
     SELECT u.id, u.nombre, u.rol, u.id_sucursal
@@ -123,7 +123,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
 
     /* ===== 1) Unidades del EJECUTIVO para su cuota ===== */
     $sqlUnidades = "
-        SELECT COUNT(*) AS unidades
+        SELECT COUNT(DISTINCT dv.id) AS unidades
         FROM detalle_venta dv
         INNER JOIN ventas v ON dv.id_venta=v.id
         INNER JOIN productos p ON dv.id_producto=p.id
@@ -136,7 +136,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
     $stmtU->execute();
     $unidades = (int)($stmtU->get_result()->fetch_assoc()['unidades'] ?? 0);
 
-    // Cuota semanal (unidades) para ejecutivo — si no hay registro, default 6
+    // Cuota semanal
     $sqlCuota = "
         SELECT cuota_unidades
         FROM cuotas_semanales_sucursal
@@ -175,7 +175,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
         $detalles = $stmtDV->get_result();
 
         while ($det = $detalles->fetch_assoc()) {
-            $comEsp = (float)$det['comision_especial']; // SIEMPRE se paga
+            $comEsp = (float)$det['comision_especial'];
             $comReg = comisionEjecutivoEquipo((float)$det['precio_unitario'], $det['tipo_producto'], $cumpleCuotaEjecutivo, $esqEje);
             $comTot = $comReg + $comEsp;
 
@@ -191,7 +191,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
         $stmtUpdV->execute();
     }
 
-    /* ===== 3) Recalcular EJECUTIVO: PREPAGO (POSPAGO intacto) ===== */
+    /* ===== 3) Recalcular EJECUTIVO: PREPAGO ===== */
     $sqlPrepago = "
         SELECT vs.id, vs.tipo_venta, vs.tipo_sim
         FROM ventas_sims vs
@@ -212,9 +212,9 @@ while ($u = $resUsuarios->fetch_assoc()) {
         $stmtUP->execute();
     }
 
-    /* ===== 4) Recalcular GERENTE: por SUCURSAL ===== */
+    /* ===== 4) Recalcular GERENTE ===== */
     if ($rol === 'Gerente') {
-        /* 4.1 Cumplimiento de TIENDA (monto semanal sucursal) */
+        /* 4.1 Cumplimiento tienda */
         $sqlCuotaPesos = "
             SELECT cuota_monto
             FROM cuotas_sucursales
@@ -243,18 +243,17 @@ while ($u = $resUsuarios->fetch_assoc()) {
 
         $cumpleTienda = $cuotaMonto > 0 ? ($montoSuc >= $cuotaMonto) : false;
 
-        /* 4.2 Reset semana (idempotente) */
+        /* 4.2 Reset */
         $stmt = $conn->prepare("UPDATE ventas SET comision_gerente=0 WHERE id_sucursal=? AND fecha_venta BETWEEN ? AND ?");
         $stmt->bind_param("iss", $id_sucursal, $inicioSemana, $finSemana);
         $stmt->execute();
-
         $stmt = $conn->prepare("UPDATE ventas_sims SET comision_gerente=0 WHERE id_sucursal=? AND fecha_venta BETWEEN ? AND ?");
         $stmt->bind_param("iss", $id_sucursal, $inicioSemana, $finSemana);
         $stmt->execute();
 
-        /* 4.3 Venta DIRECTA del gerente (solo EQUIPOS del propio gerente) */
+        /* 4.3 Venta DIRECTA gerente */
         $sqlVD = "
-            SELECT v.id, COUNT(dv.id) AS unidades_directas
+            SELECT v.id, COUNT(DISTINCT dv.id) AS unidades_directas
             FROM ventas v
             INNER JOIN detalle_venta dv ON dv.id_venta=v.id
             INNER JOIN productos p ON dv.id_producto=p.id
@@ -274,9 +273,9 @@ while ($u = $resUsuarios->fetch_assoc()) {
             $stmt->execute();
         }
 
-        /* 4.4 Ventas de SUCURSAL (ESCALONADOS) — INCLUYE también unidades del gerente */
+        /* 4.4 Escalonados sucursal (incluye gerente, sin duplicar combos) */
         $sqlEq = "
-            SELECT dv.id AS id_det, v.id AS id_venta
+            SELECT DISTINCT dv.id AS id_det, v.id AS id_venta
             FROM detalle_venta dv
             INNER JOIN ventas v ON dv.id_venta=v.id
             INNER JOIN productos p ON dv.id_producto=p.id
@@ -289,7 +288,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
         $stmtEq->execute();
         $resEq = $stmtEq->get_result();
 
-        $porVenta = []; // venta_id => suma $
+        $porVenta = [];
         $idx = 0;
         while ($row = $resEq->fetch_assoc()) {
             $idx++;
@@ -302,18 +301,16 @@ while ($u = $resUsuarios->fetch_assoc()) {
             $stmt->execute();
         }
 
-        /* 4.5 Modems/MiFi (toda la sucursal) */
+        /* 4.5 Modems/MiFi */
         $sqlMod = "
-            SELECT v.id AS id_venta, COUNT(dv.id) AS unidades
+            SELECT v.id AS id_venta, COUNT(DISTINCT dv.id) AS unidades
             FROM detalle_venta dv
             INNER JOIN ventas v ON dv.id_venta=v.id
-            INNERJOIN productos p ON dv.id_producto=p.id
+            INNER JOIN productos p ON dv.id_producto=p.id
             WHERE v.id_sucursal=? AND v.fecha_venta BETWEEN ? AND ?
               AND LOWER(p.tipo_producto) IN ('mifi','modem')
             GROUP BY v.id
         ";
-        // Fix typo in INNERJOIN -> INNER JOIN
-        $sqlMod = str_replace('INNERJOIN', 'INNER JOIN', $sqlMod);
         $stmtMod = $conn->prepare($sqlMod);
         $stmtMod->bind_param("iss", $id_sucursal, $inicioSemana, $finSemana);
         $stmtMod->execute();
@@ -326,7 +323,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
             $stmt->execute();
         }
 
-        /* 4.6 SIMS PREPAGO (Nueva/Porta) — por venta */
+        /* 4.6 SIMS PREPAGO */
         $sqlSimsG = "
             SELECT id
             FROM ventas_sims
@@ -344,7 +341,7 @@ while ($u = $resUsuarios->fetch_assoc()) {
             $stmt->execute();
         }
 
-        /* 4.7 POSPAGO (planes) — por venta, usando esquema de gerente */
+        /* 4.7 POSPAGO (planes) */
         $sqlPosG = "
             SELECT id, precio_total, modalidad
             FROM ventas_sims
@@ -369,4 +366,3 @@ while ($u = $resUsuarios->fetch_assoc()) {
 
 echo "<hr><h4>✅ Recalculo completado. Usuarios procesados: {$totalProcesados}</h4>";
 echo '<a href="reporte_nomina.php?semana='.$semanaSeleccionada.'" class="btn btn-primary mt-3">← Volver al Reporte</a>';
-?>

@@ -59,7 +59,7 @@ function obtenerComisionEspecial($id_producto, mysqli $conn) {
   return (float)($res['monto'] ?? 0);
 }
 
-// Verifica inventario disponible y (opcional) en la sucursal
+// Verifica inventario disponible y en la sucursal
 function validarInventario(mysqli $conn, int $id_inv, int $id_sucursal): bool {
   $stmt = $conn->prepare("SELECT COUNT(*) FROM inventario WHERE id=? AND estatus='Disponible' AND id_sucursal=?");
   $stmt->bind_param("ii", $id_inv, $id_sucursal);
@@ -141,13 +141,12 @@ $comentarios         = trim($_POST['comentarios'] ?? '');
 $esFin = in_array($tipo_venta, ['Financiamiento','Financiamiento+Combo'], true);
 $errores = [];
 
-// Reglas siempre
+// Validaciones
 if (!$tipo_venta)                                 $errores[] = "Selecciona el tipo de venta.";
 if ($precio_venta <= 0)                           $errores[] = "El precio de venta debe ser mayor a 0.";
 if (!$forma_pago_enganche)                        $errores[] = "Selecciona la forma de pago.";
 if ($equipo1 <= 0)                                $errores[] = "Selecciona el equipo principal.";
 
-// Reglas para Financiamiento / Combo
 if ($esFin) {
   if ($nombre_cliente === '')                     $errores[] = "Nombre del cliente es obligatorio.";
   if ($telefono_cliente === '' || !preg_match('/^\d{10}$/', $telefono_cliente)) $errores[] = "Teléfono del cliente debe tener 10 dígitos.";
@@ -161,7 +160,7 @@ if ($esFin) {
     if (round($enganche_efectivo + $enganche_tarjeta, 2) !== round($enganche, 2)) $errores[] = "Efectivo + Tarjeta debe ser igual al Enganche.";
   }
 } else {
-  // Contado: normaliza campos
+  // Contado
   $tag = '';
   $plazo_semanas = 0;
   $financiera = 'N/A';
@@ -169,7 +168,6 @@ if ($esFin) {
   $enganche_tarjeta  = 0;
 }
 
-// Validar inventarios disponibles en la sucursal seleccionada
 if ($equipo1 && !validarInventario($conn, $equipo1, $id_sucursal)) {
   $errores[] = "El equipo principal no está disponible en la sucursal seleccionada.";
 }
@@ -185,22 +183,44 @@ if ($errores) {
 }
 
 /* ========================
+   1.1) Snapshot subtipo
+======================== */
+$origen_subtipo = 'Propia';
+$stmtSub = $conn->prepare("SELECT subtipo FROM sucursales WHERE id=? LIMIT 1");
+$stmtSub->bind_param("i", $id_sucursal);
+$stmtSub->execute();
+$resSub = $stmtSub->get_result()->fetch_assoc();
+$stmtSub->close();
+if ($resSub && !empty($resSub['subtipo'])) {
+  $s = trim((string)$resSub['subtipo']);
+  $s = mb_convert_case($s, MB_CASE_TITLE, 'UTF-8');
+  $origen_subtipo = $s;
+}
+
+/* ========================
    2) Insertar Venta (TX)
 ======================== */
 try {
+  mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+  $conn->set_charset('utf8mb4');
   $conn->begin_transaction();
 
   $sqlVenta = "INSERT INTO ventas
-    (tag, nombre_cliente, telefono_cliente, tipo_venta, precio_venta, id_usuario, id_sucursal, comision,
-     enganche, forma_pago_enganche, enganche_efectivo, enganche_tarjeta, plazo_semanas, financiera, comentarios)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    (tag, nombre_cliente, telefono_cliente, tipo_venta, precio_venta,
+     id_usuario, id_sucursal, origen_subtipo,
+     comision,
+     enganche, forma_pago_enganche, enganche_efectivo, enganche_tarjeta,
+     plazo_semanas, financiera, comentarios)
+    VALUES (?,?,?,?,?,
+            ?,?,?,
+            ?,
+            ?,?,?,?,?,?,?)";
 
   $stmtVenta = $conn->prepare($sqlVenta);
   $comisionInicial = 0.0;
 
-  // tipos: s s s s d i i d d s d d i s s
   $stmtVenta->bind_param(
-    "ssssdiiddsddiss",
+    "ssssdiisddsddiss",
     $tag,
     $nombre_cliente,
     $telefono_cliente,
@@ -208,6 +228,7 @@ try {
     $precio_venta,
     $id_usuario,
     $id_sucursal,
+    $origen_subtipo,
     $comisionInicial,
     $enganche,
     $forma_pago_enganche,
@@ -217,12 +238,13 @@ try {
     $financiera,
     $comentarios
   );
+
   $stmtVenta->execute();
   $id_venta = (int)$stmtVenta->insert_id;
   $stmtVenta->close();
 
   /* ========================
-     3) Cubre cuota (semana)
+     3) Cuota semanal
   ======================= */
   $inicioSemana = obtenerInicioSemana()->format('Y-m-d H:i:s');
   $finSemana    = date('Y-m-d 23:59:59');
@@ -250,6 +272,10 @@ try {
 
   if ($tipo_venta === "Financiamiento+Combo" && $equipo2) {
     $totalComision += venderEquipo($conn, $id_venta, $equipo2, true, $cubreCuota);
+  }
+
+  if (strcasecmp((string)$origen_subtipo, 'Socio') === 0) {
+    $totalComision = 0.0;
   }
 
   /* ========================

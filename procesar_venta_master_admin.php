@@ -1,5 +1,5 @@
 <?php
-// procesar_venta_master_admin.php (Nano) – con comision_master_admin (corregido)
+// procesar_venta_master_admin.php (Nano) — MA/Socio con snapshot de origen_subtipo
 session_start();
 if (!isset($_SESSION['id_usuario'])) {
     header("Location: index.php");
@@ -33,7 +33,12 @@ $financiera        = trim($_POST['financiera'] ?? 'N/A');           // ENUM
 $comentarios       = trim($_POST['comentarios'] ?? '');
 $origen_ma         = ($_POST['origen_ma'] ?? 'nano');               // 'nano' | 'propio'
 
-// Fecha (del form) o actual
+// Snapshot del subtipo de la sucursal (viene desde el form)
+$origen_subtipo    = trim($_POST['origen_subtipo'] ?? '');          // 'Master Admin' | 'Socio' (u otros)
+
+/* =========================
+   FECHA DE VENTA
+========================= */
 $fechaVentaForm    = trim($_POST['fecha_venta'] ?? '');
 if ($fechaVentaForm !== '') {
     // llega como YYYY-MM-DDTHH:MM
@@ -47,7 +52,7 @@ if ($fechaVentaForm !== '') {
 }
 
 /* =========================
-   NORMALIZACIONES/VALIDACIONES BÁSICAS
+   NORMALIZACIONES/VALIDACIONES
 ========================= */
 $tipoVentaAllow = ['Contado','Financiamiento','Financiamiento+Combo'];
 if (!in_array($tipoVenta, $tipoVentaAllow, true)) $tipoVenta = 'Contado';
@@ -60,8 +65,14 @@ if (!in_array($financiera, $financieraAllow, true)) $financiera = 'N/A';
 
 $origen_ma = ($origen_ma === 'propio') ? 'propio' : 'nano';
 
-if ($tag === '' || $precioVenta <= 0 || $idSucursal <= 0) {
-    die("Error: faltan datos obligatorios (TAG, precio o sucursal).");
+// TAG solo obligatorio en financiamiento
+$requiereTAG = ($tipoVenta !== 'Contado');
+
+if ($precioVenta <= 0 || $idSucursal <= 0) {
+    die("Error: faltan datos obligatorios (precio o sucursal).");
+}
+if ($requiereTAG && $tag === '') {
+    die("Error: TAG es obligatorio en ventas de financiamiento.");
 }
 if ($origen_ma === 'nano') {
     if ($nombreCliente === '' || $telefonoCliente === '') {
@@ -140,42 +151,75 @@ if ($comisionSumaProductos == 0.0) {
     if ($equipo2 > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo2);
 }
 
+// Cálculo por defecto (MA):
 if ($origen_ma === 'nano') {
-    // Regla nueva: suma de productos.comision_ma - engancheTotal
+    // Regla: suma comision_ma de equipos - engancheTotal
     $comisionMA = $comisionSumaProductos - $engancheTotal;
 } else {
     // Origen propio: precio - enganche - 10%
     $comisionMA = $precioVenta - $engancheTotal - ($precioVenta * 0.10);
 }
 
-$comisionMA = round($comisionMA, 2);
+// Si es SOCIO -> comisión en 0 SIEMPRE
+if (strcasecmp($origen_subtipo, 'Socio') === 0) {
+    $comisionMA = 0.0;
+}
+
+$comisionMA = round((float)$comisionMA, 2);
 
 /* =========================
-   INSERT A VENTAS (incluye comision_master_admin)
+   INSERT A VENTAS
+   (incluye origen_ma, origen_subtipo y comision_master_admin)
 ========================= */
 $sql = "INSERT INTO ventas (
     tag, nombre_cliente, telefono_cliente,
     tipo_venta, precio_venta, enganche, forma_pago_enganche,
     enganche_efectivo, enganche_tarjeta, plazo_semanas, financiera,
-    id_sucursal, id_usuario, origen_ma, comentarios, fecha_venta,
-    comision_master_admin
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    id_sucursal, id_usuario, origen_ma, origen_subtipo,
+    comentarios, fecha_venta, comision_master_admin
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
 $stmt = $conn->prepare($sql);
 if (!$stmt) {
     die("Error en prepare(): " . $conn->error);
 }
 
-/* Tipos por orden:
-   s s s s d d s d d i s i i s s s d
+/* Tipos por orden (18):
+   1 s  tag
+   2 s  nombre_cliente
+   3 s  telefono_cliente
+   4 s  tipo_venta
+   5 d  precio_venta
+   6 d  enganche
+   7 s  forma_pago_enganche
+   8 d  enganche_efectivo
+   9 d  enganche_tarjeta
+   10 i plazo_semanas
+   11 s financiera
+   12 i id_sucursal
+   13 i id_usuario
+   14 s origen_ma
+   15 s origen_subtipo
+   16 s comentarios
+   17 s fecha_venta
+   18 d comision_master_admin
 */
 $stmt->bind_param(
-    "ssssddsddisiisssd",
+    "ssssddsddis iissss d", // ← visual
     $tag, $nombreCliente, $telefonoCliente,
     $tipoVenta, $precioVenta, $enganche, $formaPagoEng,
     $engancheEfectivo, $engancheTarjeta, $plazoSemanas, $financiera,
-    $idSucursal, $idUsuario, $origen_ma, $comentarios, $fechaVenta,
-    $comisionMA
+    $idSucursal, $idUsuario, $origen_ma, $origen_subtipo,
+    $comentarios, $fechaVenta, $comisionMA
+);
+// La cadena de tipos sin espacios:
+$stmt->bind_param(
+    "ssssddsddisiisssssd",
+    $tag, $nombreCliente, $telefonoCliente,
+    $tipoVenta, $precioVenta, $enganche, $formaPagoEng,
+    $engancheEfectivo, $engancheTarjeta, $plazoSemanas, $financiera,
+    $idSucursal, $idUsuario, $origen_ma, $origen_subtipo,
+    $comentarios, $fechaVenta, $comisionMA
 );
 
 if (!$stmt->execute()) {
@@ -204,7 +248,7 @@ if (isset($_POST['productos']) && is_array($_POST['productos'])) {
                 $stmtDet->close();
             }
 
-            // Marcar como vendido en inventario (solo si está disponible)
+            // Marcar como vendido en inventario (si está disponible)
             $upd = $conn->prepare("UPDATE inventario
                                    SET estatus='Vendido'
                                    WHERE id_producto=? AND estatus='Disponible'

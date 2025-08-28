@@ -66,7 +66,7 @@ while ($row = $r->fetch_assoc()) {
 }
 $q->close();
 
-/* PROPIAS: usa detalle + combo=2, excluye modem/mifi */
+/* PROPIAS: usa detalle + combo=2 (solo en MIN dv), excluye modem/mifi */
 $sqlSucPropias = "
     SELECT s.id AS id_sucursal, s.nombre AS sucursal,
            s.subtipo AS tipo,
@@ -74,11 +74,11 @@ $sqlSucPropias = "
                 CASE 
                     WHEN dv.id IS NULL THEN 0
                     WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
-                         AND dv.id = (
-                             SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id
-                         )
-                         THEN 2
+                    WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                        CASE 
+                            WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
+                            ELSE 0
+                        END
                     ELSE 1
                 END
            ),0) AS unidades,
@@ -133,7 +133,7 @@ while ($row = $res->fetch_assoc()) {
 $stmt->close();
 
 /* ======================================================
-   3) Ejecutivos (solo PROPIAS)
+   3) Ejecutivos (solo PROPIAS) — combo=2 solo en MIN(dv)
 ====================================================== */
 $sqlEj = "
     SELECT 
@@ -144,11 +144,11 @@ $sqlEj = "
             CASE 
                 WHEN dv.id IS NULL THEN 0
                 WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
-                     AND dv.id = (
-                         SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id
-                     )
-                     THEN 2
+                WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                    CASE 
+                        WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
+                        ELSE 0
+                    END
                 ELSE 1
             END
         ),0) AS unidades,
@@ -226,15 +226,18 @@ function findWeekIndex(string $dia, array $semanas): ?int {
     }
     return null;
 }
+
 $sqlMonthDailyPropias = "
 SELECT s.nombre AS sucursal,
        DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
        SUM(CASE 
              WHEN dv.id IS NULL THEN 0
              WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-             WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' 
-                  AND dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
-                  THEN 2
+             WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                  CASE 
+                    WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
+                    ELSE 0
+                  END
              ELSE 1
            END) AS unidades
 FROM sucursales s
@@ -291,7 +294,7 @@ foreach ($weeklySeries as $sucursalNombre => $serie) {
 
 /* ======================================================
    5) Master Admin — SIN CUOTA / SIN %
-   Reglas de unidades y ventas como en dashboard_unificado
+   Reglas de unidades/ventas (nano por venta; combo=2 solo una vez)
 ====================================================== */
 $sqlSucMA = "
     SELECT 

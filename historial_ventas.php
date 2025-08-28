@@ -37,7 +37,7 @@ $finSemana = $finSemanaObj->format('Y-m-d');
 $msg = $_GET['msg'] ?? '';
 $id_sucursal = $_SESSION['id_sucursal'] ?? 0;
 
-// 🔹 Subtipo de la sucursal (para reglas de visibilidad)
+// 🔹 Subtipo de la sucursal (para reglas de visibilidad en UI de comisiones)
 $subtipoSucursal = '';
 if ($id_sucursal) {
     $stmtSubtipo = $conn->prepare("SELECT subtipo FROM sucursales WHERE id = ? LIMIT 1");
@@ -58,11 +58,14 @@ $usuarios = $stmtUsuarios->get_result();
 $stmtUsuarios->close();
 
 // ==================================================
-// 🔹 Construcción de filtros (excluyendo Master Admin)
+// 🔹 Construcción de filtros (SOLO Tiendas Propias)
+//     Usamos snapshot v.origen_subtipo='Propia' si existe,
+//     si es NULL (ventas antiguas), caemos a s.subtipo='Propia'.
 // ==================================================
 $joinSuc = " INNER JOIN sucursales s ON s.id = v.id_sucursal ";
 
-$where = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ? AND s.subtipo = 'Propia' ";
+$where = " WHERE DATE(v.fecha_venta) BETWEEN ? AND ?
+           AND (v.origen_subtipo = 'Propia' OR (v.origen_subtipo IS NULL AND s.subtipo = 'Propia')) ";
 $params = [$inicioSemana, $finSemana];
 $types = "ss";
 
@@ -93,7 +96,7 @@ if (!empty($_GET['buscar'])) {
     $where .= " AND (
         v.nombre_cliente LIKE ? 
         OR v.telefono_cliente LIKE ? 
-        OR v.tag LIKE ?
+        OR v.tag LIKE ? 
         OR EXISTS(
             SELECT 1 FROM detalle_venta dv 
             WHERE dv.id_venta=v.id AND dv.imei1 LIKE ?
@@ -152,7 +155,7 @@ $stmt->execute();
 $ventas = $stmt->get_result();
 $stmt->close();
 
-// 🔹 Consultar detalles con precio_lista (no requiere filtro por subtipo aquí; se asocia por id_venta mostrado)
+// 🔹 Consultar detalles con precio_lista
 $sqlDetalle = "
     SELECT dv.id_venta, p.marca, p.modelo, p.color, dv.imei1,
            dv.comision_regular, dv.comision_especial, dv.comision,
@@ -184,7 +187,7 @@ $detalleResult->close();
 
 <div class="container mt-4">
     <h2>Historial de Ventas - <?= htmlspecialchars($_SESSION['nombre']) ?></h2>
-    <a href="panel.php" class="btn btn-secondary mb-3">← Volver al Panel</a>
+    <a href="dashboard_unificado.php" class="btn btn-secondary mb-3">← Volver al Dashboard</a>
 
     <?php if ($msg): ?>
         <div class="alert alert-success"><?= htmlspecialchars($msg) ?></div>
