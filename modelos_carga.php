@@ -5,11 +5,11 @@
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
 
-include 'db.php';
-include 'navbar.php';
+require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/navbar.php';
 
 $ROL = $_SESSION['rol'] ?? 'Ejecutivo';
-$permEscritura = in_array($ROL, ['Admin','Gerente']);
+$permEscritura = in_array($ROL, ['Admin','Gerente'], true);
 if (!$permEscritura) { die("No autorizado."); }
 
 // ==== Helpers ====
@@ -42,6 +42,8 @@ function slug($s){
 }
 
 // ==== Config de columnas soportadas ====
+// Nota: asegúrate de que catalogo_modelos tenga índice único coherente con tu llave lógica
+// (por ejemplo UNIQUE(marca,modelo,color,ram,capacidad,codigo_producto))
 $columns = [
   'marca'             => ['required'=>true],
   'modelo'            => ['required'=>true],
@@ -70,18 +72,18 @@ $columns = [
 // Resultados
 $report = null;
 
-if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['accion']==='cargar' && isset($_FILES['csv'])) {
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['accion'] ?? '')==='cargar' && isset($_FILES['csv'])) {
   $soloValidar  = isset($_POST['solo_validar']);
   $hacerUpsert  = isset($_POST['upsert']);
   $file         = $_FILES['csv'];
 
-  if ($file['error'] !== UPLOAD_ERR_OK) {
+  if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
     $report = ['ok'=>false,'msg'=>'Error al subir archivo (código '.$file['error'].').'];
-  } elseif ($file['size'] > 5*1024*1024) {
+  } elseif (($file['size'] ?? 0) > 5*1024*1024) {
     $report = ['ok'=>false,'msg'=>'El archivo excede 5MB.'];
   } else {
     $path = $file['tmp_name'];
-    $fh = fopen($path, 'r');
+    $fh = @fopen($path, 'r');
     if (!$fh) { $report = ['ok'=>false,'msg'=>'No se pudo leer el CSV.']; }
     else {
       // Detectar BOM UTF-8
@@ -97,9 +99,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
           $key = slug($h);
           $hdrMap[$idx] = $key;
         }
-        // Validar que estén los requeridos (marca, modelo)
+        // Validar requeridos
         $have = array_values($hdrMap);
-        if (!in_array('marca', $have) || !in_array('modelo', $have)) {
+        if (!in_array('marca', $have, true) || !in_array('modelo', $have, true)) {
           $report = ['ok'=>false,'msg'=>'Encabezados mínimos requeridos: marca, modelo.'];
         } else {
           $rows = [];
@@ -125,9 +127,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
             $errores = [];
             $okRows  = [];
 
-            // listas correctas (arreglos) para in_array
-            $YES = ['si','sí','1','yes','true'];
-            $NO  = ['no','0','false'];
+            $YES   = ['si','sí','1','yes','true'];
+            $NO    = ['no','0','false'];
             $TRUEY = ['1','si','sí','true','yes'];
 
             foreach ($rows as $r) {
@@ -149,17 +150,16 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
                 if ($dec===null) { $errores[]="L{$ln}: precio_lista inválido."; }
                 else $d['precio_lista'] = $dec;
               }
-              // normalizaciones (AQUÍ estaba el bug)
-              if ($d['resurtible']!=='') {
+              // normalizaciones
+              if (($d['resurtible'] ?? '')!=='') {
                 $val = mb_strtolower((string)$d['resurtible'],'UTF-8');
                 if (in_array($val, $YES, true))      $d['resurtible'] = 'Sí';
                 elseif (in_array($val, $NO, true))   $d['resurtible'] = 'No';
-                // si trae otro valor lo dejamos tal cual (para ENUMs personalizados)
               } else {
                 $d['resurtible'] = null;
               }
 
-              if ($d['activo']==='') {
+              if (($d['activo'] ?? '')==='') {
                 $d['activo'] = 1;
               } else {
                 $val = mb_strtolower((string)$d['activo'],'UTF-8');
@@ -172,28 +172,33 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
             if (!empty($errores)) {
               $report = ['ok'=>false,'msg'=>'Se encontraron errores de validación.','errores'=>$errores];
             } else {
-              // Preparar INSERT / UPSERT
+              // Preparar INSERT / UPSERT (compatibles con MySQL 8 y MariaDB)
               $insertCols = array_keys($columns);
               $placeholders = implode(',', array_fill(0, count($insertCols), '?'));
 
-              // Usamos alias "new" para evitar VALUES() (deprecado en MySQL 8)
+              // Usamos VALUES(col) en el UPDATE para compatibilidad con MariaDB.
+              // (En MySQL 8 está deprecado pero sigue funcionando).
               $updateSet = [];
               foreach ($insertCols as $c) {
-                if (in_array($c, ['marca','modelo','color','ram','capacidad','codigo_producto'])) continue; // parte de las llaves/índices
-                $updateSet[] = "$c = new.$c";
+                // No sobrescribas las "llaves" lógicas si quieres conservarlas; se pueden omitir del UPDATE.
+                if (in_array($c, ['marca','modelo','color','ram','capacidad','codigo_producto'], true)) continue;
+                $updateSet[] = "$c = VALUES($c)";
               }
-              $sql = "INSERT INTO catalogo_modelos (".implode(',', $insertCols).")
-                      VALUES ($placeholders)
-                      AS new
-                      ON DUPLICATE KEY UPDATE ".implode(',', $updateSet);
+
+              $sqlUpsert = "INSERT INTO catalogo_modelos (".implode(',', $insertCols).")
+                            VALUES ($placeholders)
+                            ON DUPLICATE KEY UPDATE ".implode(',', $updateSet);
 
               $sqlInsertOnly = "INSERT INTO catalogo_modelos (".implode(',', $insertCols).")
                                 VALUES ($placeholders)";
 
-              $stmt = $conn->prepare($hacerUpsert ? $sql : $sqlInsertOnly);
+              $sql = $hacerUpsert ? $sqlUpsert : $sqlInsertOnly;
+
+              $stmt = $conn->prepare($sql);
               if (!$stmt) {
                 $report = ['ok'=>false,'msg'=>'Error preparando sentencia: '.$conn->error];
               } else {
+                // Transacción
                 $conn->begin_transaction();
                 $tot = 0; $ins = 0; $upd = 0; $skp = 0; $errs = [];
                 try {
@@ -237,12 +242,14 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
                     }
 
                     if (!$stmt->execute()) {
-                      if ($conn->errno===1062) { $skp++; }
-                      else {
+                      if ($conn->errno===1062) {
+                        // choque de unique key sin UPDATE (solo sucedería en insert-only)
+                        $skp++;
+                      } else {
                         $errs[] = "L".$r['line'].": Error MySQL ".$conn->errno." - ".$conn->error;
                       }
                     } else {
-                      // affected_rows: 1 insert, 2 update (en ON DUPLICATE KEY UPDATE)
+                      // Con ON DUPLICATE: affected_rows es 1 para insert, 2 para update
                       if ($hacerUpsert) {
                         if ($conn->affected_rows===1) $ins++;
                         elseif ($conn->affected_rows===2) $upd++;
@@ -293,7 +300,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['accion']) && $_POST['ac
   }
 }
 ?>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<!-- <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"> -->
 
 <div class="container my-4">
   <div class="d-flex justify-content-between align-items-center mb-3">

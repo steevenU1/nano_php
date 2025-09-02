@@ -401,7 +401,7 @@ $list = $conn->query("SELECT * FROM catalogo_modelos $where ORDER BY marca, mode
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 <script>
   (function () {
     try { document.title = 'Catálogo · Equipos — Central2.0'; } catch(e) {}
