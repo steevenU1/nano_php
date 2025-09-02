@@ -10,6 +10,26 @@ include 'navbar.php';
 
 $mensaje = "";
 
+/* -------------------------------------------------
+   Helper: asegurar que precios_combo tenga comision_ma
+-------------------------------------------------- */
+function ensureComisionMA(mysqli $conn){
+    $has = false;
+    if ($res = $conn->query("SHOW COLUMNS FROM precios_combo LIKE 'comision_ma'")) {
+        $has = ($res->num_rows > 0);
+        $res->close();
+    }
+    if (!$has) {
+        // Intenta crear la columna de forma tolerante
+        try {
+            $conn->query("ALTER TABLE precios_combo ADD COLUMN comision_ma DECIMAL(10,2) NULL DEFAULT NULL");
+        } catch (Throwable $e) {
+            // Si falla por cualquier razón, seguimos sin romper la página
+        }
+    }
+}
+ensureComisionMA($conn);
+
 // 🔹 Procesar formulario de actualización
 if($_SERVER['REQUEST_METHOD'] === 'POST'){
     $modeloCapacidad  = $_POST['modelo'] ?? '';
@@ -18,6 +38,9 @@ if($_SERVER['REQUEST_METHOD'] === 'POST'){
 
     $promocionTexto   = trim($_POST['promocion'] ?? '');
     $quitarPromo      = isset($_POST['limpiar_promocion']); // si viene marcado, borraremos la promo (NULL)
+
+    // NUEVO: Comisión para Master Admin
+    $nuevaComisionMA  = isset($_POST['comision_ma']) && $_POST['comision_ma'] !== '' ? floatval($_POST['comision_ma']) : null;
 
     if($modeloCapacidad){
         list($marca, $modelo, $capacidad) = explode('|', $modeloCapacidad);
@@ -39,32 +62,57 @@ if($_SERVER['REQUEST_METHOD'] === 'POST'){
             $mensaje .= "✅ Precio de lista actualizado a $" . number_format($nuevoPrecioLista,2) . " ({$afectados} registros).<br>";
         }
 
-        // 2) Upsert en precios_combo (precio combo y/o promoción)
-        //    Ejecutar si:
-        //    - viene un precio_combo válido (>0)  ó
-        //    - viene un texto de promoción  ó
-        //    - se pide limpiar la promoción
-        if (
+        /* 2) Upsert en precios_combo (precio combo, promoción y comisión MA)
+              Ejecutar si:
+              - viene un precio_combo válido (>0)  ó
+              - viene un texto de promoción           ó
+              - se pide limpiar la promoción          ó
+              - viene una comisión MA (>= 0)
+        */
+        $disparaUpsert =
             ($nuevoPrecioCombo !== null && $nuevoPrecioCombo > 0) ||
             ($promocionTexto !== '') ||
-            $quitarPromo
-        ){
-            // Si no viene precio_combo, lo dejamos en NULL para no sobreescribir el vigente.
-            // La expresión COALESCE en el UPDATE mantiene el existente si enviamos NULL.
-            $precioComboParam = ($nuevoPrecioCombo !== null && $nuevoPrecioCombo > 0) ? $nuevoPrecioCombo : null;
-            // Si se marca "limpiar", guardaremos NULL; si no, guardamos el texto (o NULL si está vacío)
-            $promocionParam   = $quitarPromo ? null : ($promocionTexto !== '' ? $promocionTexto : null);
+            $quitarPromo ||
+            ($nuevaComisionMA !== null && $nuevaComisionMA >= 0);
 
-            $sql = "
-                INSERT INTO precios_combo (marca, modelo, capacidad, precio_combo, promocion)
-                VALUES (?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    precio_combo = COALESCE(VALUES(precio_combo), precio_combo),
-                    promocion    = VALUES(promocion)
-            ";
-            $stmt = $conn->prepare($sql);
-            // tipos: sss d s  (el d admite NULL; MySQLi lo manda como NULL)
-            $stmt->bind_param("sssds", $marca, $modelo, $capacidad, $precioComboParam, $promocionParam);
+        if ($disparaUpsert){
+            // Parametrizar valores (NULL conserva el existente en ON DUPLICATE con COALESCE)
+            $precioComboParam = ($nuevoPrecioCombo !== null && $nuevoPrecioCombo > 0) ? $nuevoPrecioCombo : null;
+            $promocionParam   = $quitarPromo ? null : ($promocionTexto !== '' ? $promocionTexto : null);
+            $comisionMAParam  = ($nuevaComisionMA !== null && $nuevaComisionMA >= 0) ? $nuevaComisionMA : null;
+
+            // Intentar incluir comision_ma en el upsert. Si no existe, ensureComisionMA ya la intentó crear.
+            $tieneColumna = false;
+            if ($res = $conn->query("SHOW COLUMNS FROM precios_combo LIKE 'comision_ma'")) {
+                $tieneColumna = ($res->num_rows > 0);
+                $res->close();
+            }
+
+            if ($tieneColumna) {
+                $sql = "
+                    INSERT INTO precios_combo (marca, modelo, capacidad, precio_combo, promocion, comision_ma)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        precio_combo = COALESCE(VALUES(precio_combo), precio_combo),
+                        promocion    = VALUES(promocion),
+                        comision_ma  = COALESCE(VALUES(comision_ma), comision_ma)
+                ";
+                $stmt = $conn->prepare($sql);
+                // types: s s s d s d
+                $stmt->bind_param("sssdsd", $marca, $modelo, $capacidad, $precioComboParam, $promocionParam, $comisionMAParam);
+            } else {
+                // Respaldo (por si la columna no quedó creada): guarda sin comision_ma
+                $sql = "
+                    INSERT INTO precios_combo (marca, modelo, capacidad, precio_combo, promocion)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        precio_combo = COALESCE(VALUES(precio_combo), precio_combo),
+                        promocion    = VALUES(promocion)
+                ";
+                $stmt = $conn->prepare($sql);
+                $stmt->bind_param("sssds", $marca, $modelo, $capacidad, $precioComboParam, $promocionParam);
+            }
+
             $stmt->execute();
             $stmt->close();
 
@@ -76,10 +124,13 @@ if($_SERVER['REQUEST_METHOD'] === 'POST'){
             } elseif ($promocionTexto !== '') {
                 $mensaje .= "✅ Promoción guardada: <i>".htmlspecialchars($promocionTexto)."</i>.<br>";
             }
+            if ($nuevaComisionMA !== null && $nuevaComisionMA >= 0) {
+                $mensaje .= "✅ Comisión MA guardada: $" . number_format($nuevaComisionMA,2) . ".<br>";
+            }
         }
 
         if ($mensaje === "") {
-            $mensaje = "⚠️ No enviaste cambios: captura un precio o promoción.";
+            $mensaje = "⚠️ No enviaste cambios: captura un precio, promoción o comisión MA.";
         }
 
     } else {
@@ -122,7 +173,7 @@ $modelos = $conn->query("
         <div class="alert alert-info"><?= $mensaje ?></div>
     <?php endif; ?>
 
-    <form method="POST" class="card p-3 shadow-sm bg-white" style="max-width:650px;">
+    <form method="POST" class="card p-3 shadow-sm bg-white" style="max-width:720px;">
         <div class="mb-3">
             <label class="form-label">Modelo y Capacidad</label>
             <select name="modelo" class="form-select" required>
@@ -137,16 +188,22 @@ $modelos = $conn->query("
         </div>
 
         <div class="row">
-          <div class="col-md-6 mb-3">
+          <div class="col-md-4 mb-3">
               <label class="form-label">Nuevo Precio de Lista ($)</label>
               <input type="number" step="0.01" name="precio_lista" class="form-control" placeholder="Ej. 2500.00">
               <div class="form-text">Déjalo en blanco si no deseas cambiarlo.</div>
           </div>
 
-          <div class="col-md-6 mb-3">
+          <div class="col-md-4 mb-3">
               <label class="form-label">Nuevo Precio Combo ($)</label>
               <input type="number" step="0.01" name="precio_combo" class="form-control" placeholder="Ej. 2199.00">
               <div class="form-text">Déjalo en blanco para conservar el combo actual.</div>
+          </div>
+
+          <div class="col-md-4 mb-3">
+              <label class="form-label">Comisión MA ($)</label>
+              <input type="number" step="0.01" name="comision_ma" class="form-control" placeholder="Ej. 150.00">
+              <div class="form-text">Comisión para Master Admin. Déjalo en blanco para no cambiarla.</div>
           </div>
         </div>
 
