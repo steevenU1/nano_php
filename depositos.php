@@ -1,5 +1,5 @@
 <?php
-// depositos.php — Admin valida depósitos con opción de ajuste (neteando gastos) + tabs + export gastos + export transacciones del día
+// depositos.php — Admin valida depósitos con opción de ajuste (usando total_efectivo YA NETO) + tabs + export gastos + export transacciones del día
 session_start();
 if (!isset($_SESSION['id_usuario']) || ($_SESSION['rol'] ?? '') !== 'Admin') {
   header("Location: 403.php");
@@ -26,7 +26,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id_deposito'], $_POST
   $idDeposito = (int)$_POST['id_deposito'];
   $accion     = $_POST['accion'];
 
-  // Traer depósito + corte + gastos del corte (neteados)
+  // Traer depósito + corte + gastos informativos del corte
+  // OJO: cc.total_efectivo ya es EFECTIVO NETO DEL CORTE
   $sqlBase = "
     SELECT 
       ds.id, ds.id_corte, ds.id_sucursal, ds.monto_depositado, ds.estado,
@@ -50,7 +51,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id_deposito'], $_POST
 
   if ($dep && $dep['estado'] === 'Pendiente') {
     $adminId = (int)$_SESSION['id_usuario'];
-    $efectivoNetoCorte = (float)$dep['total_efectivo'] - (float)$dep['gastos_corte'];
+
+    // Ya NO restamos gastos aquí: total_efectivo YA ES NETO
+    $efectivoNetoCorte = (float)$dep['total_efectivo'];
     if ($efectivoNetoCorte < 0) $efectivoNetoCorte = 0;
 
     if ($accion === 'Validar') {
@@ -104,7 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id_deposito'], $_POST
       $upd->close();
     }
 
-    // Recalcular suma validada del corte y cerrar si procede (vs efectivo neto)
+    // Recalcular suma validada del corte y cerrar si procede (vs total_efectivo NETO)
     $sumQ = $conn->prepare("
       SELECT
         cc.id AS corte_id,
@@ -128,9 +131,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['id_deposito'], $_POST
     $sumQ->close();
 
     if ($sum) {
-      $umbralCierre = max(0.0, (float)$sum['total_efectivo'] - (float)$sum['gastos_corte']);
+      // El umbral ES el total_efectivo (ya neto). Gastos sólo informativos.
+      $umbralCierre = max(0.0, (float)$sum['total_efectivo']);
       if ((float)$sum['suma_val'] >= $umbralCierre) {
-        $obsAppend = 'Cierre automático por validación de depósitos (neteando gastos).';
+        $obsAppend = 'Cierre automático por validación de depósitos (total_efectivo ya neto).';
         $close = $conn->prepare("
           UPDATE cortes_caja
           SET estado='Cerrado',
@@ -163,7 +167,8 @@ if (!in_array($tab, $tabsValid, true)) $tab = 'pendientes';
 $sucursales = $conn->query("SELECT id, nombre FROM sucursales ORDER BY nombre")->fetch_all(MYSQLI_ASSOC);
 
 // ---------------------------------------------
-// 3) Pendientes (lista por depósito, con gastos del corte)
+// 3) Pendientes (lista por depósito)
+// total_efectivo YA ES NETO; gastos_corte sólo informativo
 // ---------------------------------------------
 $sqlPendientes = "
   SELECT
@@ -173,7 +178,7 @@ $sqlPendientes = "
     cc.fecha_corte,
     cc.total_efectivo,
     COALESCE(ge.gastos_efectivo,0) AS gastos_corte,
-    (cc.total_efectivo - COALESCE(ge.gastos_efectivo,0)) AS efectivo_neto_corte,
+    cc.total_efectivo AS efectivo_neto_corte,
     ds.monto_depositado,
     ds.banco,
     ds.referencia,
@@ -242,7 +247,8 @@ $historial = $stH->get_result()->fetch_all(MYSQLI_ASSOC);
 $stH->close();
 
 // ---------------------------------------------
-// 5) Saldos por sucursal (neteando gastos)
+// 5) Saldos por sucursal (neteando gastos a nivel global)
+// (Se mantiene como estaba; es reporte agregado)
 // ---------------------------------------------
 $sqlSaldos = "
   SELECT 
@@ -268,7 +274,8 @@ $sqlSaldos = "
 $saldos = $conn->query($sqlSaldos)->fetch_all(MYSQLI_ASSOC);
 
 // ---------------------------------------------
-// 6) Cortes (con gastos del corte y efectivo neto)
+// 6) Cortes
+// total_efectivo YA ES NETO; mostramos gastos sólo informativos
 // ---------------------------------------------
 $c_sucursal_id = (int)($_GET['c_sucursal_id'] ?? 0);
 $c_desde       = trim($_GET['c_desde'] ?? '');
@@ -286,7 +293,7 @@ $sqlCortes = "
     cc.total_comision_especial,
     cc.total_general,
     COALESCE(ge.gastos_efectivo,0) AS gastos_corte,
-    (cc.total_efectivo - COALESCE(ge.gastos_efectivo,0)) AS efectivo_neto,
+    cc.total_efectivo AS efectivo_neto,
     cc.depositado,
     cc.monto_depositado,
     (SELECT COUNT(*) FROM cobros cb WHERE cb.id_corte = cc.id) AS num_cobros,
@@ -313,7 +320,7 @@ $cortes = $stC->get_result()->fetch_all(MYSQLI_ASSOC);
 $stC->close();
 
 // ---------------------------------------------
-// 7) Gastos (tab nueva) + filtros y preview
+// 7) Gastos (tab) + filtros y preview
 // ---------------------------------------------
 $g_sucursal_id = (int)($_GET['g_sucursal_id'] ?? 0);
 $g_desde       = trim($_GET['g_desde'] ?? '');
@@ -422,9 +429,9 @@ $stG->close();
                     <th>Sucursal</th>
                     <th>ID Corte</th>
                     <th>Fecha Corte</th>
-                    <th>Efec.</th>
-                    <th>Gastos</th>
-                    <th>Neto</th>
+                    <th>Efec. (neto)</th>
+                    <th>Gastos (info)</th>
+                    <th>Neto (corte)</th>
                     <th>Depósito</th>
                     <th>Banco</th>
                     <th>Referencia</th>
@@ -435,14 +442,14 @@ $stG->close();
                 <tbody>
                   <?php $lastCorte = null;
                   foreach ($pendientes as $p):
-                    $efecNeto   = max(0, (float)$p['efectivo_neto_corte']);
+                    $efecNeto   = max(0, (float)$p['efectivo_neto_corte']); // ya neto
                     $validPrev  = (float)$p['suma_validada_previa'];
                     $faltante   = max(0, $efecNeto - ($validPrev + (float)$p['monto_depositado']));
                     if ($lastCorte !== $p['id_corte']): ?>
                       <tr class="table-secondary">
                         <td colspan="12">
                           Corte #<?= (int)$p['id_corte'] ?> - <?= e($p['sucursal']) ?> 
-                          (Fecha: <?= e($p['fecha_corte']) ?> | Efectivo: $<?= number_format($p['total_efectivo'],2) ?> | Gastos: <span class="text-danger">$<?= number_format($p['gastos_corte'],2) ?></span> | <b>Neto:</b> $<?= number_format($efecNeto,2) ?>)
+                          (Fecha: <?= e($p['fecha_corte']) ?> | Efectivo neto: $<?= number_format($p['total_efectivo'],2) ?> | Gastos del día: <span class="text-danger">$<?= number_format($p['gastos_corte'],2) ?></span>)
                         </td>
                       </tr>
                     <?php endif; ?>
@@ -451,7 +458,7 @@ $stG->close();
                       <td><?= e($p['sucursal']) ?></td>
                       <td><?= (int)$p['id_corte'] ?></td>
                       <td><?= e($p['fecha_corte']) ?></td>
-                      <td>$<?= number_format($p['total_efectivo'],2) ?></td>
+                      <td class="fw-bold">$<?= number_format($p['total_efectivo'],2) ?></td>
                       <td class="text-danger">$<?= number_format($p['gastos_corte'],2) ?></td>
                       <td class="fw-bold">$<?= number_format($efecNeto,2) ?></td>
                       <td>$<?= number_format($p['monto_depositado'],2) ?></td>
@@ -607,7 +614,7 @@ $stG->close();
               <thead class="table-dark">
                 <tr>
                   <th>ID Corte</th><th>Sucursal</th><th>Fecha Operación</th><th>Fecha Corte</th>
-                  <th>Efec.</th><th>Gastos</th><th>Efec. Neto</th><th>Tarj.</th><th>Com. Esp.</th><th>Total</th>
+                  <th>Efec. Neto</th><th>Gastos (info)</th><th>Tarj.</th><th>Com. Esp.</th><th>Total</th>
                   <th>Ajuste Dep.</th><th>Validado (dep+ajuste)</th><th>Depositado</th><th>Estado</th><th>Detalle</th>
                 </tr>
               </thead>
@@ -620,9 +627,8 @@ $stG->close();
                     <td><?= e($c['sucursal']) ?></td>
                     <td><?= e($c['fecha_operacion']) ?></td>
                     <td><?= e($c['fecha_corte']) ?></td>
-                    <td>$<?= number_format((float)$c['total_efectivo'],2) ?></td>
+                    <td class="fw-bold">$<?= number_format((float)$c['total_efectivo'],2) ?></td>
                     <td class="text-danger">$<?= number_format((float)$c['gastos_corte'],2) ?></td>
-                    <td class="fw-bold">$<?= number_format((float)$c['efectivo_neto'],2) ?></td>
                     <td>$<?= number_format((float)$c['total_tarjeta'],2) ?></td>
                     <td>$<?= number_format((float)$c['total_comision_especial'],2) ?></td>
                     <td><b>$<?= number_format((float)$c['total_general'],2) ?></b></td>
@@ -901,7 +907,7 @@ $stG->close();
   document.querySelectorAll('.js-ajustar').forEach(btn => {
     btn.addEventListener('click', () => {
       const id      = btn.dataset.id;
-      const total   = parseFloat(btn.dataset.totalnet || '0'); // EFECTIVO NETO
+      const total   = parseFloat(btn.dataset.totalnet || '0'); // EFECTIVO NETO (cc.total_efectivo)
       const previo  = parseFloat(btn.dataset.previo   || '0');
       const depo    = parseFloat(btn.dataset.depo     || '0');
       const suc     = btn.dataset.sucursal || '';

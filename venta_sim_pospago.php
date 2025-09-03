@@ -12,6 +12,10 @@ $idSucursal = (int)($_SESSION['id_sucursal'] ?? 0);
 $nombreUser = trim($_SESSION['nombre'] ?? 'Usuario');
 $mensaje    = '';
 
+// ===== Flags (alta rápida de SIM pospago) =====
+$selSimId = isset($_GET['sel_sim']) ? (int)$_GET['sel_sim'] : 0; // para preseleccionar tras alta
+$flash    = $_GET['msg'] ?? ''; // sim_ok, sim_dup, sim_err
+
 // 🔹 Planes pospago visibles en el selector
 $planesPospago = [
     "Plan Bait 199" => 199,
@@ -30,10 +34,14 @@ function tipos_mysqli(array $vals): string {
     foreach ($vals as $v) {
         if (is_int($v)) { $t .= 'i'; continue; }
         if (is_float($v)) { $t .= 'd'; continue; }
-        // Permitimos null como string (MySQLi lo maneja como NULL con s)
         $t .= 's';
     }
     return $t;
+}
+function redir($msg, $extra = []) {
+    $qs = array_merge(['msg'=>$msg], $extra);
+    $url = basename($_SERVER['PHP_SELF']).'?'.http_build_query($qs);
+    header("Location: $url"); exit();
 }
 
 // 1) Traer fila vigente de comisiones de POSPAGO por plan (tipo=Ejecutivo)
@@ -60,9 +68,66 @@ function calcularComisionPospago(mysqli $conn, float $planMonto, string $modalid
 }
 
 /* ===============================
-   PROCESAR VENTA
+   ALTA RÁPIDA DE SIM (Pospago)
+   (antes del candado; no es venta)
 ================================ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] === 'POST') && (($_POST['accion'] ?? '') === 'alta_sim_pospago')) {
+    $iccid    = strtoupper(trim($_POST['iccid'] ?? ''));
+    $operador = trim($_POST['operador'] ?? '');
+    $dn       = trim($_POST['dn'] ?? '');         // OPCIONAL en pospago
+    $caja_id  = trim($_POST['caja_id'] ?? '');
+
+    // Validaciones
+    if (!preg_match('/^\d{19}[A-Z]$/', $iccid)) {
+        redir('sim_err', ['e'=>'ICCID inválido. Debe ser 19 dígitos + 1 letra mayúscula (ej. ...1909F).']);
+    }
+    if (!in_array($operador, ['Bait','AT&T'], true)) {
+        redir('sim_err', ['e'=>'Operador inválido. Elige Bait o AT&T.']);
+    }
+    if ($dn !== '' && !preg_match('/^\d{10}$/', $dn)) {
+        redir('sim_err', ['e'=>'Si capturas DN debe tener 10 dígitos.']);
+    }
+
+    // Duplicado global con nombre de sucursal
+    $stmt = $conn->prepare("
+        SELECT i.id, i.id_sucursal, i.estatus, s.nombre AS sucursal_nombre
+        FROM inventario_sims i
+        JOIN sucursales s ON s.id = i.id_sucursal
+        WHERE i.iccid=? LIMIT 1
+    ");
+    $stmt->bind_param('s', $iccid);
+    $stmt->execute();
+    $dup = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if ($dup) {
+        if ((int)$dup['id_sucursal'] === $idSucursal && $dup['estatus'] === 'Disponible') {
+            redir('sim_dup', ['sel_sim'=>(int)$dup['id']]);
+        }
+        $msg = "El ICCID ya existe (ID {$dup['id']}) en la sucursal {$dup['sucursal_nombre']} con estatus {$dup['estatus']}.";
+        redir('sim_err', ['e'=>$msg]);
+    }
+
+    // Insert como POSPAGO Disponible en esta sucursal
+    $sql = "INSERT INTO inventario_sims (iccid, dn, operador, caja_id, tipo_plan, estatus, id_sucursal)
+            VALUES (?,?,?,?, 'Pospago', 'Disponible', ?)";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param('ssssi', $iccid, $dn, $operador, $caja_id, $idSucursal);
+
+    try {
+        $stmt->execute();
+        $newId = (int)$stmt->insert_id;
+        $stmt->close();
+        redir('sim_ok', ['sel_sim'=>$newId]);
+    } catch (mysqli_sql_exception $e) {
+        redir('sim_err', ['e'=>'No se pudo guardar: '.$e->getMessage()]);
+    }
+}
+
+/* ===============================
+   PROCESAR VENTA POSPAGO
+================================ */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['accion'] ?? '') !== 'alta_sim_pospago')) {
     $esEsim         = isset($_POST['es_esim']) ? 1 : 0;
     $idSim          = $_POST['id_sim'] ?? null;               // solo si NO es eSIM (opcional)
     $plan           = $_POST['plan'] ?? '';
@@ -162,9 +227,9 @@ if ($rowNS) { $nomSucursal = $rowNS['nombre']; }
 $stmtNS->close();
 
 /* ===============================
-   LISTAR SIMs DISPONIBLES
+   LISTAR SIMs DISPONIBLES (incluye operador)
 ================================ */
-$sql = "SELECT id, iccid, caja_id, fecha_ingreso
+$sql = "SELECT id, iccid, caja_id, fecha_ingreso, operador
         FROM inventario_sims
         WHERE estatus='Disponible' AND id_sucursal=?
         ORDER BY fecha_ingreso ASC";
@@ -245,10 +310,10 @@ $stmt->close();
     .badge-soft{background:#eef2ff; color:#1e40af; border:1px solid #dbeafe;}
     .list-compact{margin:0; padding-left:1rem;}
     .list-compact li{margin-bottom:.25rem;}
+    .readonly-hint{background:#f1f5f9;}
   </style>
 
   <script>
-    // Mantengo tus helpers originales (misma lógica)
     function toggleSimSelect() {
       const isEsim = document.getElementById('es_esim').checked;
       document.getElementById('sim_fisica').style.display = isEsim ? 'none' : 'block';
@@ -275,6 +340,14 @@ $stmt->close();
 
 <div class="container my-4">
 
+  <?php if ($flash === 'sim_ok'): ?>
+    <div class="alert alert-success">✅ SIM pospago agregada a tu inventario y preseleccionada.</div>
+  <?php elseif ($flash === 'sim_dup'): ?>
+    <div class="alert alert-info">ℹ️ Ese ICCID ya existía en tu inventario y quedó seleccionado.</div>
+  <?php elseif ($flash === 'sim_err'): ?>
+    <div class="alert alert-danger">❌ No se pudo agregar la SIM. <?= htmlspecialchars($_GET['e'] ?? '') ?></div>
+  <?php endif; ?>
+
   <div class="d-flex align-items-center justify-content-between mb-3">
     <div>
       <h2 class="page-title mb-1"><i class="bi bi-sim me-2"></i>Venta de SIM Pospago</h2>
@@ -296,6 +369,7 @@ $stmt->close();
   <?= $mensaje ?>
 
   <form method="POST" class="card card-elev p-3 mb-4" id="formPospago" novalidate>
+    <input type="hidden" name="accion" value="venta_pospago">
     <div class="card-body">
 
       <div class="section-title"><i class="bi bi-collection"></i> Selección de SIM</div>
@@ -307,18 +381,33 @@ $stmt->close();
 
       <!-- SIM Física con buscador -->
       <div class="row g-3 mb-3" id="sim_fisica">
-        <div class="col-md-6">
+        <div class="col-md-7">
           <label class="form-label">SIM física disponible</label>
           <select name="id_sim" id="id_sim" class="form-select select2-sims">
             <option value="">-- Selecciona SIM --</option>
             <?php while($row = $disponibles->fetch_assoc()): ?>
               <option value="<?= (int)$row['id'] ?>"
-                      data-iccid="<?= htmlspecialchars($row['iccid']) ?>">
-                <?= htmlspecialchars($row['iccid']) ?> | Caja: <?= htmlspecialchars($row['caja_id']) ?> | Ingreso: <?= htmlspecialchars($row['fecha_ingreso']) ?>
+                      data-iccid="<?= htmlspecialchars($row['iccid']) ?>"
+                      data-operador="<?= htmlspecialchars($row['operador']) ?>"
+                      <?= ($selSimId && $selSimId==(int)$row['id']) ? 'selected' : '' ?>
+              >
+                <?= htmlspecialchars($row['iccid']) ?> | <?= htmlspecialchars($row['operador']) ?> | Caja: <?= htmlspecialchars($row['caja_id']) ?> | Ingreso: <?= htmlspecialchars($row['fecha_ingreso']) ?>
               </option>
             <?php endwhile; ?>
           </select>
-          <div class="form-text">Escribe ICCID, caja o fecha para filtrar.</div>
+          <div class="form-text">Escribe ICCID, operador o caja para filtrar.</div>
+
+          <div class="d-flex gap-2 mt-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalAltaSimPospago">
+              <i class="bi bi-plus-circle me-1"></i> Agregar SIM (no está en inventario)
+            </button>
+          </div>
+        </div>
+
+        <!-- Operador solo lectura -->
+        <div class="col-md-5">
+          <label class="form-label">Operador (solo lectura)</label>
+          <input type="text" id="tipoSimView" class="form-control readonly-hint" value="" readonly>
         </div>
       </div>
 
@@ -395,6 +484,58 @@ $stmt->close();
   </form>
 </div>
 
+<!-- Modal: Alta rápida de SIM (Pospago) -->
+<div class="modal fade" id="modalAltaSimPospago" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-md modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-light">
+        <h5 class="modal-title"><i class="bi bi-sim me-2 text-primary"></i>Alta de SIM a inventario (Pospago)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <form method="POST" id="formAltaSimPospago">
+        <input type="hidden" name="accion" value="alta_sim_pospago">
+        <div class="modal-body">
+          <div class="alert alert-secondary py-2">
+            Se agregará a tu inventario de <b><?= htmlspecialchars($nomSucursal) ?></b> como <b>Disponible</b> y <b>Pospago</b>.
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">ICCID</label>
+            <input type="text" name="iccid" id="alta_iccid" class="form-control" placeholder="8952140063250341909F" maxlength="20" required>
+            <div class="form-text">Formato: 19 dígitos + 1 letra mayúscula.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Operador</label>
+            <select name="operador" id="alta_operador" class="form-select" required>
+              <option value="">-- Selecciona --</option>
+              <option value="Bait">Bait</option>
+              <option value="AT&T">AT&T</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">DN (10 dígitos) <span class="text-muted">(opcional)</span></label>
+            <input type="text" name="dn" id="alta_dn" class="form-control" placeholder="5512345678">
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Caja ID (opcional)</label>
+            <input type="text" name="caja_id" id="alta_caja" class="form-control" placeholder="Etiqueta/caja">
+          </div>
+
+          <?php if ($flash==='sim_err' && !empty($_GET['e'])): ?>
+            <div class="text-danger small mt-2"><?= htmlspecialchars($_GET['e']) ?></div>
+          <?php endif; ?>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save me-1"></i> Guardar y usar
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <!-- Modal de Confirmación -->
 <div class="modal fade" id="modalConfirmacion" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
@@ -419,6 +560,7 @@ $stmt->close();
                   <li><strong>Sucursal:</strong> <span id="conf_sucursal"><?= htmlspecialchars($nomSucursal) ?></span></li>
                   <li><strong>Tipo SIM:</strong> <span id="conf_tipo_sim">—</span></li>
                   <li class="d-none" id="li_iccid"><strong>ICCID:</strong> <span id="conf_iccid">—</span></li>
+                  <li class="d-none" id="li_operador"><strong>Operador:</strong> <span id="conf_operador">—</span></li>
                 </ul>
               </div>
             </div>
@@ -458,8 +600,7 @@ $stmt->close();
   </div>
 </div>
 
-<!-- JS: Bootstrap bundle + jQuery + Select2 -->
-<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script> -->
+<!-- JS: jQuery + Select2 (Bootstrap bundle va en tu layout/navbar) -->
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 
@@ -477,6 +618,7 @@ $(function(){
   const $nombre = $('#nombre_cliente');
   const $numero = $('#numero_cliente');
   const $coment = $('#comentarios');
+  const $tipoSimView = $('#tipoSimView');
 
   // Select2
   $('.select2-sims').select2({
@@ -490,12 +632,21 @@ $(function(){
     language: { noResults: () => 'Sin resultados', searching: () => 'Buscando…' }
   });
 
-  // Inicializar toggles (manteniendo tu misma lógica)
+  // Inicializar toggles
   toggleSimSelect();
   toggleEquipo();
   setPrecio();
 
-  // Validación ligera (no cambia tu backend)
+  // Mostrar operador solo lectura
+  function actualizarOperador() {
+    const $opt = $simSel.find(':selected');
+    const operador = ($opt.data('operador') || '').toString().trim();
+    $tipoSimView.val(operador || '');
+  }
+  actualizarOperador();
+  $simSel.on('change', actualizarOperador);
+
+  // Validación ligera
   function validar(){
     const errs = [];
     const plan = $plan.val();
@@ -505,11 +656,9 @@ $(function(){
     if (isNaN(precio) || precio <= 0) errs.push('El precio/plan es inválido o 0.');
 
     // Si NO es eSIM, la SIM física es opcional (tu backend lo permite). No forzamos required.
-    // Validar número 10 dígitos (opcional pero útil)
     const num = ($numero.val() || '').trim();
     if (num && !/^\d{10}$/.test(num)) errs.push('El número del cliente debe tener 10 dígitos.');
 
-    // Modalidad con equipo: la relación de venta es opcional según tu backend → no validamos requerido.
     return errs;
   }
 
@@ -520,10 +669,14 @@ $(function(){
 
     if (!isEsim && $simSel.val()) {
       const iccid = $simSel.find(':selected').data('iccid') || '';
+      const operador = ($simSel.find(':selected').data('operador') || '').toString();
       $('#conf_iccid').text(iccid || '—');
+      $('#conf_operador').text(operador || '—');
       $('#li_iccid').removeClass('d-none');
+      $('#li_operador').removeClass('d-none');
     } else {
       $('#li_iccid').addClass('d-none');
+      $('#li_operador').addClass('d-none');
     }
 
     // Plan y precio
@@ -552,11 +705,10 @@ $(function(){
   let allowSubmit = false;
   $form.on('submit', function(e){
     if (allowSubmit) return; // ya confirmado
-
     e.preventDefault();
     const errs = validar();
     if (errs.length){
-      alert('Corrige lo siguiente:\n• ' + errs.join('\n• '));
+      alert('Corrige lo siguiente:\\n• ' + errs.join('\\n• '));
       return;
     }
     poblarModal();
@@ -569,6 +721,9 @@ $(function(){
     modalConfirm.hide();
     $form[0].submit();
   });
+
+  // Preselección si venimos de alta
+  <?php if ($selSimId): ?> $('#id_sim').trigger('change'); <?php endif; ?>
 });
 </script>
 

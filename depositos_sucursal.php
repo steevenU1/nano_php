@@ -1,5 +1,5 @@
 <?php
-// depositos_sucursal.php
+// depositos_sucursal.php (ajustado para comisión incluida y neto de gastos desde el corte)
 session_start();
 if (!isset($_SESSION['id_usuario']) || !in_array($_SESSION['rol'], ['Ejecutivo','Admin'])) {
     header("Location: 403.php"); exit();
@@ -82,8 +82,8 @@ function guardar_comprobante(mysqli $conn, int $deposito_id, array $file, int $i
 
 /* ==========================================================
    Registrar DEPÓSITO (comprobante OBLIGATORIO)
-   - Netea gastos_sucursal (SUM(monto) por id_corte e id_sucursal)
-   - Compatible con ONLY_FULL_GROUP_BY
+   ⚠️ Ahora el pendiente se calcula: total_efectivo (del corte) − depósitos
+   (El corte ya trae comisión especial incluida y gastos descontados)
 ========================================================== */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'registrar') {
   $id_corte        = (int)($_POST['id_corte'] ?? 0);
@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'regis
   $referencia      = trim($_POST['referencia'] ?? '');
   $motivo          = trim($_POST['motivo'] ?? '');
 
-  // 1) Validar archivo obligatorio primero
+  // 1) Validación de archivo obligatoria
   if (!isset($_FILES['comprobante']) || $_FILES['comprobante']['error'] === UPLOAD_ERR_NO_FILE) {
     $msg = "<div class='alert alert-warning'>⚠ Debes adjuntar el comprobante del depósito.</div>";
   } elseif ($_FILES['comprobante']['error'] !== UPLOAD_ERR_OK) {
@@ -108,38 +108,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'regis
       $msg = "<div class='alert alert-warning'>⚠ Tipo de archivo no permitido. Solo PDF/JPG/PNG.</div>";
     } else {
       if ($id_corte>0 && $monto>0 && $banco!=='') {
-        // 2) Traer totales neteados (SIN GROUP BY; usamos agregaciones)
+        // 2) Traer totales (sin volver a netear gastos)
         $sqlCheck = "
           SELECT
-            MAX(cc.total_efectivo)                    AS total_efectivo,
-            COALESCE(SUM(ds.monto_depositado), 0)      AS suma_depositado,
-            COALESCE(MAX(ge.gastos_efectivo), 0)       AS gastos_efectivo
+            MAX(cc.total_efectivo)               AS total_efectivo,
+            COALESCE(SUM(ds.monto_depositado),0) AS suma_depositado
           FROM cortes_caja cc
           LEFT JOIN depositos_sucursal ds ON ds.id_corte = cc.id
-          LEFT JOIN (
-            SELECT id_corte, SUM(monto) AS gastos_efectivo
-            FROM gastos_sucursal
-            WHERE id_sucursal = ?
-            GROUP BY id_corte
-          ) ge ON ge.id_corte = cc.id
           WHERE cc.id = ?
         ";
         $stmt = $conn->prepare($sqlCheck);
-        $stmt->bind_param("ii", $idSucursal, $id_corte);
+        $stmt->bind_param("i", $id_corte);
         $stmt->execute();
         $corte = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
         if ($corte) {
-          $total_efectivo   = (float)$corte['total_efectivo'];
+          $total_efectivo   = (float)$corte['total_efectivo'];   // ya incluye comisión y ya está neto de gastos
           $suma_depositado  = (float)$corte['suma_depositado'];
-          $gastos_efectivo  = (float)$corte['gastos_efectivo'];
-          $pendiente_neteo  = $total_efectivo - $gastos_efectivo - $suma_depositado;
-          if ($pendiente_neteo < 0) $pendiente_neteo = 0;
+          $pendiente        = $total_efectivo - $suma_depositado;
+          if ($pendiente < 0) $pendiente = 0;
 
-          if ($monto > $pendiente_neteo + 0.0001) {
+          if ($monto > $pendiente + 0.0001) {
             $msg = "<div class='alert alert-danger'>❌ El depósito excede el pendiente del corte.<br>
-                    <small>Pendiente neteado = $".number_format($pendiente_neteo,2)." (Efectivo $".number_format($total_efectivo,2)." − Gastos $".number_format($gastos_efectivo,2)." − Depósitos $".number_format($suma_depositado,2).")</small></div>";
+                    <small>Pendiente = $".number_format($pendiente,2)." (Total efectivo del corte $".number_format($total_efectivo,2)." − Depósitos $".number_format($suma_depositado,2).")</small></div>";
           } else {
             // 3) Insertar y adjuntar (si adjuntar falla, revertimos)
             $stmtIns = $conn->prepare("
@@ -171,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'regis
           $msg = "<div class='alert alert-danger'>❌ Corte no encontrado.</div>";
         }
       } else {
-        $msg = "<div class='alert alert-warning'>⚠ Debes llenar todos los campos obligatorios.</div>";
+        $msg = "<div class='alert alert.warning'>⚠ Debes llenar todos los campos obligatorios.</div>";
       }
     }
   }
@@ -207,36 +199,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'subir
 
 /* ==========================================================
    Consultas para render
-   - Cortes pendientes neteados con gastos
+   - Cortes pendientes (pendiente = total_efectivo − depósitos)
    - Historial de depósitos
 ========================================================== */
-// Cortes pendientes (neteando gastos) — compatible con ONLY_FULL_GROUP_BY
+// Cortes pendientes — compatible con ONLY_FULL_GROUP_BY
 $sqlPendientes = "
   SELECT 
     cc.id,
     cc.fecha_corte,
-    cc.total_efectivo,
-    COALESCE(MAX(ge.gastos_efectivo), 0)   AS gastos_efectivo,
+    cc.total_efectivo,               -- ya incluye comisión especial y está neto de gastos
     COALESCE(SUM(ds.monto_depositado), 0)  AS total_depositado
   FROM cortes_caja cc
   LEFT JOIN depositos_sucursal ds ON ds.id_corte = cc.id
-  LEFT JOIN (
-    SELECT id_corte, SUM(monto) AS gastos_efectivo
-    FROM gastos_sucursal
-    WHERE id_sucursal = ?
-    GROUP BY id_corte
-  ) ge ON ge.id_corte = cc.id
   WHERE cc.id_sucursal = ? AND cc.estado='Pendiente'
   GROUP BY cc.id, cc.fecha_corte, cc.total_efectivo
   ORDER BY cc.fecha_corte ASC
 ";
 $stmtPend = $conn->prepare($sqlPendientes);
-$stmtPend->bind_param("ii", $idSucursal, $idSucursal);
+$stmtPend->bind_param("i", $idSucursal);
 $stmtPend->execute();
 $cortesPendientes = $stmtPend->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmtPend->close();
 
-// Historial (sin cambios)
+// Historial
 $sqlHistorial = "
   SELECT ds.*, cc.fecha_corte
   FROM depositos_sucursal ds
@@ -270,7 +255,7 @@ $stmtHist->close();
 
   <div class="alert alert-info mt-3">
     <strong>Cálculo del pendiente:</strong>
-    <em>Total efectivo del corte − Gastos (gastos_sucursal) − Depósitos realizados</em>.
+    <em>Total efectivo del corte (incluye comisión especial y ya neto de gastos) − Depósitos realizados</em>.
   </div>
 
   <div class="card shadow-sm mt-3">
@@ -289,8 +274,7 @@ $stmtHist->close();
               <tr>
                 <th>ID Corte</th>
                 <th>Fecha Corte</th>
-                <th>Total Efectivo</th>
-                <th>Gastos (neteados)</th>
+                <th>Total Efectivo (neto)</th>
                 <th>Total Depositado</th>
                 <th>Pendiente</th>
                 <th style="min-width:320px">Registrar Depósito</th>
@@ -298,14 +282,13 @@ $stmtHist->close();
             </thead>
             <tbody>
               <?php foreach ($cortesPendientes as $c):
-                $pendiente = (float)$c['total_efectivo'] - (float)$c['gastos_efectivo'] - (float)$c['total_depositado'];
+                $pendiente = (float)$c['total_efectivo'] - (float)$c['total_depositado'];
                 if ($pendiente < 0) $pendiente = 0;
               ?>
                 <tr>
                   <td><?= (int)$c['id'] ?></td>
                   <td><?= htmlspecialchars($c['fecha_corte']) ?></td>
                   <td>$<?= number_format($c['total_efectivo'],2) ?></td>
-                  <td class="text-danger">$<?= number_format($c['gastos_efectivo'],2) ?></td>
                   <td>$<?= number_format($c['total_depositado'],2) ?></td>
                   <td class="fw-bold <?= $pendiente>0 ? 'text-danger' : 'text-success' ?>">
                     $<?= number_format($pendiente,2) ?>

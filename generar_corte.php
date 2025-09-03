@@ -89,17 +89,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
             exit();
         }
 
-        /* Totales de cobros */
-        $total_efectivo = 0.0;
-        $total_tarjeta  = 0.0;
-        $total_comision_especial = 0.0;
+        /* Totales de cobros
+           IMPORTANTE: la comisión especial (10) cuenta como EFECTIVO */
+        $total_efectivo_bruto   = 0.0; // efectivo + comisiones especiales
+        $total_efectivo_solo    = 0.0; // solo efectivo (referencia)
+        $total_tarjeta          = 0.0;
+        $total_comision_especial= 0.0;
+
         foreach ($cobros as $c) {
-            $total_efectivo          += (float)$c['monto_efectivo'];
-            $total_tarjeta           += (float)$c['monto_tarjeta'];
-            $total_comision_especial += (float)$c['comision_especial'];
+            $ef   = (float)$c['monto_efectivo'];
+            $tj   = (float)$c['monto_tarjeta'];
+            $com  = (float)$c['comision_especial'];
+
+            $total_efectivo_solo    += $ef;
+            $total_tarjeta          += $tj;
+            $total_comision_especial+= $com;
+
+            // Aquí está el truco: la comisión entra al EFECTIVO del corte
+            $total_efectivo_bruto   += ($ef + $com);
         }
 
-        /* Gastos del día (no ligados) */
+        /* Gastos del día (no ligados) — descuentan EFECTIVO */
         $stG = $conn->prepare("
           SELECT IFNULL(SUM(monto),0) AS total_gastos
           FROM gastos_sucursal
@@ -112,12 +122,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
         $stG->close();
         $total_gastos_efectivo = (float)($gRow['total_gastos'] ?? 0.0);
 
-        /* Efectivo neto y total general */
-        $efectivo_neto = max(0.0, $total_efectivo - $total_gastos_efectivo);
+        /* Efectivo neto y total general
+           efectivo_neto = (efectivo + comisiones) - gastos */
+        $efectivo_neto = max(0.0, $total_efectivo_bruto - $total_gastos_efectivo);
         $total_general = $efectivo_neto + $total_tarjeta;
 
-        /* Insertar CORTE con efectivo neto y observación */
-        $obs = "Gastos efectivo considerados en corte: $".number_format($total_gastos_efectivo,2);
+        /* Observación informativa */
+        $obs = "Gastos efectivo considerados en corte: $".number_format($total_gastos_efectivo,2).
+               " | Comisión especial incluida en EFECTIVO: $".number_format($total_comision_especial,2);
+
+        /* Insertar CORTE */
         $stmtCorte = $conn->prepare("
           INSERT INTO cortes_caja
           (id_sucursal, id_usuario, fecha_operacion, fecha_corte, estado,
@@ -171,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fecha_operacion'])) {
     }
 }
 
-/* ===== 4) A partir de aquí ya podemos imprimir HTML / incluir navbar ===== */
+/* ===== 4) HTML / datos para la vista ===== */
 require_once __DIR__ . '/navbar.php';
 
 /* Cobros pendientes de la fecha seleccionada (para lista) */
@@ -194,12 +208,22 @@ $stmt->close();
 $hayCobros   = count($cobrosFecha) > 0;
 $btnDisabled = $hayCobros ? '' : 'disabled';
 
-/* === Totales para “tarjetita” (fecha seleccionada) === */
-$tot_efectivo = 0.0; $tot_tarjeta = 0.0; $tot_comision = 0.0;
+/* === Totales para “tarjetita” (fecha seleccionada)
+       EFECTIVO mostrado = efectivo + comisión especial  */
+$tot_efectivo_solo = 0.0;
+$tot_efectivo      = 0.0; // efectivo + comisión
+$tot_tarjeta       = 0.0;
+$tot_comision      = 0.0;
+
 foreach ($cobrosFecha as $c) {
-  $tot_efectivo += (float)$c['monto_efectivo'];
-  $tot_tarjeta  += (float)$c['monto_tarjeta'];
-  $tot_comision += (float)$c['comision_especial'];
+  $ef = (float)$c['monto_efectivo'];
+  $tj = (float)$c['monto_tarjeta'];
+  $co = (float)$c['comision_especial'];
+
+  $tot_efectivo_solo += $ef;
+  $tot_tarjeta       += $tj;
+  $tot_comision      += $co;
+  $tot_efectivo      += ($ef + $co);
 }
 
 /* Gastos del día (no ligados aún) */
@@ -214,6 +238,7 @@ $g2 = $stG2->get_result()->fetch_assoc();
 $stG2->close();
 $tot_gastos = (float)($g2['total_gastos'] ?? 0.0);
 
+/* Efectivo neto de la tarjeta previa (para informar antes de generar corte) */
 $efectivo_neto = max(0.0, $tot_efectivo - $tot_gastos);
 
 $desde = $_GET['desde'] ?? date('Y-m-01');
@@ -250,6 +275,7 @@ if (!empty($_SESSION['flash_msg'])) {
     .kpi{display:flex;flex-direction:column;gap:.25rem;padding:12px 14px;border-radius:12px;border:1px dashed #e5e7eb;background:#fafafa}
     .kpi .lbl{font-size:.9rem;color:#64748b}
     .kpi .val{font-weight:700}
+    .hint{font-size:.85rem;color:#64748b}
   </style>
 </head>
 <body class="bg-light">
@@ -264,7 +290,7 @@ if (!empty($_SESSION['flash_msg'])) {
     <div class="row g-2">
       <div class="col-12 col-md-3">
         <div class="kpi">
-          <span class="lbl">Cobrado en efectivo</span>
+          <span class="lbl">Cobrado en efectivo <span class="hint">(incluye comisión especial)</span></span>
           <span class="val text-success">$<?= number_format($tot_efectivo,2) ?></span>
         </div>
       </div>
@@ -288,7 +314,7 @@ if (!empty($_SESSION['flash_msg'])) {
       </div>
     </div>
     <div class="form-text mt-2">
-      <b>Nota:</b> Al generar el corte, se descontarán los gastos del efectivo y se ligarán al corte automáticamente.
+      <b>Nota:</b> La <u>comisión especial</u> de PayJoy/Krediya se incluye dentro del efectivo del corte.
     </div>
   </div>
 
@@ -316,8 +342,7 @@ if (!empty($_SESSION['flash_msg'])) {
       <button type="submit" class="btn btn-primary w-50"
               <?= $btnDisabled ?>
               title="<?= $hayCobros ? 'Generar corte' : 'No hay cobros en esta fecha' ?>"
-// IMPORTANT: Confirm dialog
-              onclick="return confirm('Se generará el corte con EFECTIVO NETO = efectivo menos gastos del día. ¿Confirmas?');">
+              onclick="return confirm('Se generará el corte con EFECTIVO = (efectivo + comisión especial) y se restarán los gastos del día. ¿Confirmas?');">
         📤 Generar Corte
       </button>
     </div>
@@ -345,7 +370,7 @@ if (!empty($_SESSION['flash_msg'])) {
             <td><?= h($p['motivo']) ?></td>
             <td><?= h($p['tipo_pago']) ?></td>
             <td>$<?= number_format((float)$p['monto_total'], 2) ?></td>
-            <td>$<?= number_format((float)$p['monto_efectivo'], 2) ?></td>
+            <td>$<?= number_format(((float)$p['monto_efectivo'] + (float)$p['comision_especial']), 2) ?></td>
             <td>$<?= number_format((float)$p['monto_tarjeta'], 2) ?></td>
             <td>$<?= number_format((float)$p['comision_especial'], 2) ?></td>
             <td>
