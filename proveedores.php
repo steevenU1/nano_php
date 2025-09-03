@@ -109,7 +109,8 @@ if ($permEscritura && $_SERVER['REQUEST_METHOD']==='POST') {
   $email       = texto($_POST['email'] ?? '', 120);
   $direccion   = texto($_POST['direccion'] ?? '', 1000);
   $credito_lim = money_in($_POST['credito_limite'] ?? '0');
-  $dias_cred   = ($_POST['dias_credito'] !== '' ? (int)$_POST['dias_credito'] : null);
+  // ✅ Forzar a 0 cuando viene vacío
+  $dias_cred   = ($_POST['dias_credito'] !== '' ? (int)$_POST['dias_credito'] : 0);
   $notas       = texto($_POST['notas'] ?? '', 2000);
 
   if ($nombre === '') {
@@ -119,7 +120,8 @@ if ($permEscritura && $_SERVER['REQUEST_METHOD']==='POST') {
       $stmt = $conn->prepare("UPDATE proveedores
         SET nombre=?, rfc=?, contacto=?, telefono=?, email=?, direccion=?, credito_limite=?, dias_credito=?, notas=?
         WHERE id=?");
-      $stmt->bind_param("ssssssdiss", $nombre, $rfc, $contacto, $telefono, $email, $direccion, $credito_lim, $dias_cred, $notas, $id);
+      // ✅ Tipos corregidos: último es id (i)
+      $stmt->bind_param("ssssssdisi", $nombre, $rfc, $contacto, $telefono, $email, $direccion, $credito_lim, $dias_cred, $notas, $id);
       $ok = $stmt->execute(); $stmt->close();
       $mensaje = $ok ? "<div class='alert alert-success'>Proveedor actualizado.</div>" : "<div class='alert alert-danger'>Error al actualizar.</div>";
     } else {
@@ -131,7 +133,8 @@ if ($permEscritura && $_SERVER['REQUEST_METHOD']==='POST') {
         $stmt = $conn->prepare("INSERT INTO proveedores
           (nombre, rfc, contacto, telefono, email, direccion, credito_limite, dias_credito, notas, activo)
           VALUES (?,?,?,?,?,?,?,?,?,1)");
-        $stmt->bind_param("ssssssdiss", $nombre, $rfc, $contacto, $telefono, $email, $direccion, $credito_lim, $dias_cred, $notas);
+        // ✅ 9 placeholders → 9 tipos
+        $stmt->bind_param("ssssssdis", $nombre, $rfc, $contacto, $telefono, $email, $direccion, $credito_lim, $dias_cred, $notas);
         $ok = $stmt->execute(); $stmt->close();
         $mensaje = $ok ? "<div class='alert alert-success'>Proveedor creado.</div>" : "<div class='alert alert-danger'>Error al crear.</div>";
       }
@@ -181,39 +184,180 @@ $sql = "
   ORDER BY pr.nombre ASC
 ";
 $proveedores = $conn->query($sql);
-
-// a partir de aquí ya podemos pintar HTML
-include 'navbar.php';
+$countProv = $proveedores ? $proveedores->num_rows : 0;
 ?>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- ✅ Navbar responsive en móvil -->
+  <title>Catálogo · Proveedores</title>
+  <link rel="icon" type="image/x-icon" href="./img/favicon.ico">
+
+  <!-- Bootstrap / Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
+  <style>
+    :root{
+      --brand:#0d6efd;
+      --brand-100:rgba(13,110,253,.08);
+    }
+    body.bg-light{
+      background:
+        radial-gradient(1200px 420px at 110% -80%, var(--brand-100), transparent),
+        radial-gradient(1200px 420px at -10% 120%, rgba(25,135,84,.06), transparent),
+        #f8fafc;
+    }
+
+    /* 🔧 Ajuste visual del NAVBAR para móvil (sin tocar navbar.php) */
+    #topbar, .navbar-luga{ font-size:16px; }
+    @media (max-width:576px){
+      #topbar, .navbar-luga{
+        font-size:16px;
+        --brand-font:1.00em;
+        --nav-font:.95em;
+        --drop-font:.95em;
+        --icon-em:1.05em;
+        --pad-y:.44em; --pad-x:.62em;
+      }
+      #topbar .navbar-brand img, .navbar-luga .navbar-brand img{ width:1.8em; height:1.8em; }
+      #topbar .btn-asistencia, .navbar-luga .btn-asistencia{ font-size:.95em; padding:.5em .9em !important; border-radius:12px; }
+      #topbar .navbar-toggler, .navbar-luga .navbar-toggler{ padding:.45em .7em; }
+      #topbar .nav-avatar, #topbar .nav-initials,
+      .navbar-luga .nav-avatar, .navbar-luga .nav-initials{ width:2.1em; height:2.1em; }
+    }
+    @media (max-width:360px){
+      #topbar, .navbar-luga{ font-size:15px; }
+    }
+
+    /* Encabezado moderno */
+    .page-head{
+      border:0; border-radius:1rem;
+      background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 60%, #8b5cf6 100%);
+      color:#fff;
+      box-shadow: 0 20px 45px rgba(2,8,20,.12), 0 3px 10px rgba(2,8,20,.06);
+    }
+    .page-head .icon{
+      width:48px;height:48px; display:grid;place-items:center;
+      background:rgba(255,255,255,.15); border-radius:14px;
+    }
+
+    /* ✅ Pills con texto negro y fondo claro para mejor contraste */
+    .chip{
+      color:#111 !important;
+      background:rgba(255,255,255,.92) !important;
+      border:1px solid rgba(0,0,0,.12) !important;
+      padding:.35rem .6rem; border-radius:999px; font-weight:600;
+    }
+    .chip .bi{ color:inherit !important; }
+
+    .card-elev{
+      border:0; border-radius:1rem;
+      box-shadow:0 10px 28px rgba(2,8,20,.06), 0 2px 8px rgba(2,8,20,.05);
+    }
+    .filters .form-control, .filters .form-select{
+      border-radius:.75rem;
+    }
+    .btn-clear{ border-radius:.75rem; }
+
+    .table thead th{
+      letter-spacing:.4px; text-transform:uppercase; font-size:.78rem;
+    }
+
+    /* ✅ Badges de estado: usar variables Bootstrap para asegurar texto oscuro */
+    .badge.status-badge{
+      --bs-badge-padding-x: .6rem;
+      --bs-badge-padding-y: .35rem;
+      --bs-badge-font-weight: 600;
+      --bs-badge-border-radius: 999px;
+      border: 1px solid transparent;
+    }
+    .badge.status-on{
+      --bs-badge-color: #111;     /* texto */
+      --bs-badge-bg: #dcfce7;     /* fondo */
+      color: var(--bs-badge-color) !important;
+      background-color: var(--bs-badge-bg) !important;
+      border-color: #bbf7d0 !important;
+    }
+    .badge.status-off{
+      --bs-badge-color: #111;     /* texto */
+      --bs-badge-bg: #e5e7eb;     /* fondo */
+      color: var(--bs-badge-color) !important;
+      background-color: var(--bs-badge-bg) !important;
+      border-color: #d1d5db !important;
+    }
+
+    .modal-header{ border-bottom:0; }
+    .modal-footer{ border-top:0; }
+  </style>
+</head>
+<body class="bg-light">
+
+<?php include 'navbar.php'; ?>
 
 <div class="container my-4">
-  <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
-    <h3 class="mb-2">Proveedores</h3>
-    <div class="d-flex gap-2">
-      <form class="d-flex" method="get">
-        <select name="estado" class="form-select form-select-sm me-2" onchange="this.form.submit()">
-          <option value="activos"   <?= $filtroEstado==='activos'?'selected':'' ?>>Activos</option>
-          <option value="inactivos" <?= $filtroEstado==='inactivos'?'selected':'' ?>>Inactivos</option>
-          <option value="todos"     <?= $filtroEstado==='todos'?'selected':'' ?>>Todos</option>
-        </select>
-        <input class="form-control form-control-sm me-2" name="q" value="<?= esc($busqueda) ?>" placeholder="Buscar...">
-        <button class="btn btn-sm btn-outline-primary">Buscar</button>
+
+  <!-- Encabezado -->
+  <div class="page-head p-4 p-md-5 mb-4">
+    <div class="d-flex flex-wrap align-items-center gap-3">
+      <div class="icon"><i class="bi bi-building-gear fs-4"></i></div>
+      <div class="flex-grow-1">
+        <h2 class="mb-1 fw-bold">Catálogo de Proveedores</h2>
+        <div class="opacity-75">Gestión de proveedores y deuda.</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <span class="chip"><i class="bi bi-people me-1"></i> <?= (int)$countProv ?> registros</span>
+        <span class="chip"><i class="bi bi-clock-history me-1"></i> <?= date('d/m/Y H:i') ?></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Barra superior: filtros + nuevo -->
+  <div class="card card-elev mb-4">
+    <div class="card-body filters">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <h5 class="mb-0"><i class="bi bi-funnel me-2 text-primary"></i>Filtros</h5>
+        <div class="d-flex gap-2">
+          <?php if ($permEscritura): ?>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalProv" id="btnNuevoProv">
+              <i class="bi bi-plus-lg me-1"></i> Nuevo
+            </button>
+          <?php endif; ?>
+        </div>
+      </div>
+      <form class="row g-3 align-items-end" method="get">
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label mb-1">Estado</label>
+          <select name="estado" class="form-select" onchange="this.form.submit()">
+            <option value="activos"   <?= $filtroEstado==='activos'?'selected':'' ?>>Activos</option>
+            <option value="inactivos" <?= $filtroEstado==='inactivos'?'selected':'' ?>>Inactivos</option>
+            <option value="todos"     <?= $filtroEstado==='todos'?'selected':'' ?>>Todos</option>
+          </select>
+        </div>
+        <div class="col-12 col-sm-6 col-md-6">
+          <label class="form-label mb-1">Buscar</label>
+          <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input class="form-control" name="q" value="<?= esc($busqueda) ?>" placeholder="Nombre, RFC, contacto, teléfono o email">
+          </div>
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label mb-1 d-none d-md-block">&nbsp;</label>
+          <button class="btn btn-outline-primary w-100"><i class="bi bi-filter-circle me-1"></i> Aplicar</button>
+        </div>
       </form>
-      <?php if ($permEscritura): ?>
-        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalProv" id="btnNuevoProv">+ Nuevo</button>
-      <?php endif; ?>
     </div>
   </div>
 
   <?= $mensaje ?>
 
-  <div class="card shadow-sm">
-    <div class="card-body">
+  <!-- Tabla -->
+  <div class="card card-elev">
+    <div class="card-body p-2 p-sm-3">
       <div class="table-responsive">
-        <table class="table table-hover align-middle">
-          <thead>
+        <table class="table table-striped table-hover align-middle">
+          <thead class="table-dark">
             <tr>
               <th>Nombre</th>
               <th>RFC</th>
@@ -221,6 +365,7 @@ include 'navbar.php';
               <th>Teléfono</th>
               <th>Email</th>
               <th>Alta</th>
+              <th class="text-center">Días crédito</th> <!-- ✅ Nueva columna -->
               <th class="text-end">Crédito</th>
               <th class="text-end">Deuda</th>
               <th class="text-end">Disp.</th>
@@ -234,6 +379,8 @@ include 'navbar.php';
               $deuda    = max(0,(float)$p['saldo_deuda']);
               $disp     = $credito - $deuda;
               $dispCls  = ($disp < 0) ? 'text-danger fw-bold' : 'text-success';
+              $isOn     = ((int)$p['activo']===1);
+              $diasCred = (int)$p['dias_credito'];
             ?>
             <tr>
               <td><?= esc($p['nombre']) ?></td>
@@ -242,18 +389,22 @@ include 'navbar.php';
               <td><?= esc($p['telefono']) ?></td>
               <td><?= esc($p['email']) ?></td>
               <td><?= esc($p['creado']) ?></td>
+              <td class="text-center"><?= $diasCred ?></td> <!-- ✅ Mostrar días -->
               <td class="text-end">$<?= number_format($credito,2) ?></td>
               <td class="text-end">$<?= number_format($deuda,2) ?></td>
               <td class="text-end <?= $dispCls ?>">$<?= number_format($disp,2) ?></td>
               <td class="text-center">
-                <?= ((int)$p['activo']===1) ? '<span class="badge bg-success">Activo</span>' : '<span class="badge bg-secondary">Inactivo</span>' ?>
+                <span class="badge status-badge <?= $isOn?'status-on':'status-off' ?>">
+                  <?= $isOn ? 'Activo' : 'Inactivo' ?>
+                </span>
               </td>
               <td class="text-end">
                 <div class="btn-group">
                   <button class="btn btn-sm btn-outline-secondary btnVer"
                           data-id="<?= (int)$p['id'] ?>"
-                          data-nombre="<?= esc($p['nombre']) ?>"
-                  >Ver</button>
+                          data-nombre="<?= esc($p['nombre']) ?>">
+                    <i class="bi bi-eye"></i> Ver
+                  </button>
                   <?php if ($permEscritura): ?>
                     <button class="btn btn-sm btn-outline-primary btnEdit"
                       data-id="<?= (int)$p['id'] ?>"
@@ -266,18 +417,20 @@ include 'navbar.php';
                       data-credito="<?= number_format((float)$p['credito_limite'],2,'.','') ?>"
                       data-dias="<?= esc($p['dias_credito']) ?>"
                       data-notas="<?= esc($p['notas']) ?>"
-                      data-bs-toggle="modal" data-bs-target="#modalProv">Editar</button>
-                    <a class="btn btn-sm btn-outline-<?= ((int)$p['activo']===1)?'danger':'success' ?>"
+                      data-bs-toggle="modal" data-bs-target="#modalProv">
+                      <i class="bi bi-pencil-square"></i> Editar
+                    </button>
+                    <a class="btn btn-sm btn-outline-<?= $isOn?'danger':'success' ?>"
                        href="proveedores.php?accion=toggle&id=<?= (int)$p['id'] ?>"
-                       onclick="return confirm('¿Seguro que deseas <?= ((int)$p['activo']===1)?'inactivar':'activar' ?> este proveedor?');">
-                       <?= ((int)$p['activo']===1)?'Inactivar':'Activar' ?>
+                       onclick="return confirm('¿Seguro que deseas <?= $isOn?'inactivar':'activar' ?> este proveedor?');">
+                       <?= $isOn?'Inactivar':'Activar' ?>
                     </a>
                   <?php endif; ?>
                 </div>
               </td>
             </tr>
           <?php endwhile; else: ?>
-            <tr><td colspan="11" class="text-center text-muted py-4">Sin proveedores</td></tr>
+            <tr><td colspan="12" class="text-center text-muted py-4">Sin proveedores</td></tr>
           <?php endif; ?>
           </tbody>
         </table>
@@ -292,7 +445,7 @@ include 'navbar.php';
     <form method="post" class="modal-content">
       <input type="hidden" name="id" id="prov_id">
       <div class="modal-header">
-        <h5 class="modal-title" id="modalProvTitle">Nuevo proveedor</h5>
+        <h5 class="modal-title" id="modalProvTitle"><i class="bi bi-building-add me-2 text-primary"></i>Nuevo proveedor</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
       </div>
       <div class="modal-body">
@@ -313,13 +466,16 @@ include 'navbar.php';
             <label class="form-label">Teléfono</label>
             <input name="telefono" id="prov_telefono" class="form-control">
           </div>
-            <div class="col-md-3">
+          <div class="col-md-3">
             <label class="form-label">Email</label>
             <input type="email" name="email" id="prov_email" class="form-control">
           </div>
           <div class="col-md-3">
             <label class="form-label">Línea de crédito</label>
-            <input type="number" step="0.01" min="0" name="credito_limite" id="prov_credito" class="form-control" value="0.00">
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" step="0.01" min="0" name="credito_limite" id="prov_credito" class="form-control" value="0.00">
+            </div>
           </div>
           <div class="col-md-3">
             <label class="form-label">Días de crédito</label>
@@ -336,7 +492,7 @@ include 'navbar.php';
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-success">Guardar</button>
+        <button class="btn btn-success"><i class="bi bi-check2-circle me-1"></i> Guardar</button>
       </div>
     </form>
   </div>
@@ -347,7 +503,7 @@ include 'navbar.php';
   <div class="modal-dialog modal-xl modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><span id="ver_nombre"></span></h5>
+        <h5 class="modal-title"><i class="bi bi-building-check me-2 text-primary"></i><span id="ver_nombre"></span></h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
       </div>
       <div class="modal-body">
@@ -378,7 +534,7 @@ include 'navbar.php';
             <div class="row g-3">
               <div class="col-12">
                 <div class="card shadow-sm">
-                  <div class="card-header">Últimas facturas</div>
+                  <div class="card-header bg-white fw-semibold"><i class="bi bi-receipt-cutoff me-2"></i>Últimas facturas</div>
                   <div class="card-body p-0">
                     <div class="table-responsive">
                       <table class="table table-sm mb-0">
@@ -394,7 +550,7 @@ include 'navbar.php';
               </div>
               <div class="col-12">
                 <div class="card shadow-sm">
-                  <div class="card-header">Últimos pagos</div>
+                  <div class="card-header bg-white fw-semibold"><i class="bi bi-cash-coin me-2"></i>Últimos pagos</div>
                   <div class="card-body p-0">
                     <div class="table-responsive">
                       <table class="table table-sm mb-0">
@@ -413,10 +569,14 @@ include 'navbar.php';
   </div>
 </div>
 
+<!-- JS -->
+<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script> -->
+
 <script>
 const btnNuevo  = document.getElementById('btnNuevoProv');
 function setForm(data){
-  document.getElementById('modalProvTitle').textContent = data.id ? 'Editar proveedor' : 'Nuevo proveedor';
+  document.getElementById('modalProvTitle').innerHTML = (data.id ? '<i class="bi bi-pencil-square me-2 text-primary"></i>Editar proveedor'
+                                                                : '<i class="bi bi-building-add me-2 text-primary"></i>Nuevo proveedor');
   document.getElementById('prov_id').value        = data.id || '';
   document.getElementById('prov_nombre').value    = data.nombre || '';
   document.getElementById('prov_rfc').value       = data.rfc || '';
@@ -424,7 +584,7 @@ function setForm(data){
   document.getElementById('prov_telefono').value  = data.telefono || '';
   document.getElementById('prov_email').value     = data.email || '';
   document.getElementById('prov_credito').value   = data.credito || '0.00';
-  document.getElementById('prov_dias').value      = data.dias ?? '';
+  document.getElementById('prov_dias').value      = (data.dias ?? '');
   document.getElementById('prov_direccion').value = data.direccion || '';
   document.getElementById('prov_notas').value     = data.notas || '';
 }
@@ -522,7 +682,6 @@ document.querySelectorAll('.btnVer').forEach(btn => {
     } catch (e) {
       document.getElementById('ver_tbl_compras').innerHTML = '<tr><td colspan="7" class="text-danger text-center">Error al cargar</td></tr>';
       document.getElementById('ver_tbl_pagos').innerHTML   = '<tr><td colspan="4" class="text-danger text-center">Error al cargar</td></tr>';
-      // Opcional: console.error(e);
     }
   });
 });
@@ -533,3 +692,6 @@ document.querySelectorAll('.btnVer').forEach(btn => {
     try { document.title = 'Catálogo · Proveedores — Central2.0'; } catch(e) {}
   })();
 </script>
+
+</body>
+</html>
