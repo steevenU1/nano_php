@@ -6,7 +6,6 @@ session_start();
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
 
 include 'db.php';
-
 include 'navbar.php';
 
 $ROL = $_SESSION['rol'] ?? 'Ejecutivo';
@@ -176,6 +175,13 @@ $topProv = array_slice($saldoPorProveedor, 0, 5, true);
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
 <div class="container my-4">
+  <?php if (isset($_GET['msg'])): ?>
+    <div class="alert alert-info alert-dismissible fade show" role="alert">
+      <?= esc($_GET['msg']) ?>
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+  <?php endif; ?>
+
   <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
     <h3 class="mb-2">Resumen de compras</h3>
     <div>

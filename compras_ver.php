@@ -1,10 +1,13 @@
 <?php
-// compras_ver.php
+// compras_ver.php (versión robusta p/ nanored)
+// - Maneja ausencia de tablas/columnas (compras_cargos, compras_detalle_ingresos, subtotal/iva/total, costo vs precio unitario, etc.)
+// - Activa modal de Bootstrap (incluye bundle JS)
+
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
 include 'db.php';
 
-// ID de compra (desde GET o desde POST al agregar pago)
+// ID de compra
 $id = (int)($_POST['id_compra'] ?? ($_GET['id'] ?? 0));
 if ($id <= 0) die("ID inválido.");
 
@@ -23,6 +26,24 @@ function column_exists(mysqli $conn, string $table, string $col): bool {
   return $q && $q->num_rows > 0;
 }
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/* ============================
+   Descubrimiento de esquema
+============================ */
+$hasTblIngresos = table_exists($conn, 'compras_detalle_ingresos');
+$hasTblCargos   = table_exists($conn, 'compras_cargos');
+
+$hasPU   = column_exists($conn, 'compras_detalle', 'precio_unitario') || column_exists($conn, 'compras_detalle', 'costo_unitario');
+$unitCol = column_exists($conn, 'compras_detalle', 'precio_unitario') ? 'precio_unitario' : (column_exists($conn, 'compras_detalle', 'costo_unitario') ? 'costo_unitario' : null);
+$hasIVAp = column_exists($conn, 'compras_detalle', 'iva_porcentaje');
+
+$hasSubCol = column_exists($conn, 'compras_detalle', 'subtotal');
+$hasIvaCol = column_exists($conn, 'compras_detalle', 'iva');
+$hasTotCol = column_exists($conn, 'compras_detalle', 'total');
+
+$hasCarIvaMonto = $hasTblCargos && column_exists($conn, 'compras_cargos', 'iva_monto');
+$hasCarTotal    = $hasTblCargos && column_exists($conn, 'compras_cargos', 'total');
+$hasCarIVAp     = $hasTblCargos && column_exists($conn, 'compras_cargos', 'iva_porcentaje');
 
 /* ============================
    POST: Agregar pago (modal)
@@ -74,37 +95,59 @@ if (isset($_GET['excel'])) {
   ")->fetch_assoc();
   if (!$enc) die("Compra no encontrada.");
 
-  // Detalle de modelos
+  // Detalle de modelos (ingresadas opcional)
+  $ingresadasExpr = $hasTblIngresos ? "(SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id)" : "0";
   $detRows = [];
   $detQ = $conn->query("
-    SELECT d.*
-         , (SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id) AS ingresadas
+    SELECT d.*, {$ingresadasExpr} AS ingresadas
     FROM compras_detalle d
     WHERE d.id_compra={$id}
     ORDER BY id ASC
   ");
   while($r=$detQ->fetch_assoc()) $detRows[]=$r;
 
-  // Sumas
-  $sumDet = $conn->query("
-    SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot
-    FROM compras_detalle WHERE id_compra={$id}
-  ")->fetch_assoc();
-  $sumCar = $conn->query("
-    SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot
-    FROM compras_cargos WHERE id_compra={$id}
-  ")->fetch_assoc();
+  // Sumas detalle (fallback por columnas)
+  if ($hasSubCol && $hasIvaCol && $hasTotCol) {
+    $sumDet = $conn->query("
+      SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot
+      FROM compras_detalle WHERE id_compra={$id}
+    ")->fetch_assoc();
+  } else {
+    // calcular en SQL con unitario/iva%
+    $exprSub = $unitCol ? "COALESCE(SUM(cantidad * {$unitCol}),0)" : "0";
+    $exprIva = ($unitCol && $hasIVAp) ? "COALESCE(SUM(cantidad * {$unitCol} * (IFNULL(iva_porcentaje,0)/100)),0)" : "0";
+    $sumDet = $conn->query("
+      SELECT {$exprSub} AS sub, {$exprIva} AS iva
+      FROM compras_detalle WHERE id_compra={$id}
+    ")->fetch_assoc();
+    $sumDet['tot'] = (float)$sumDet['sub'] + (float)$sumDet['iva'];
+  }
+
+  // Sumas cargos (si existe tabla)
+  if ($hasTblCargos) {
+    if ($hasCarIvaMonto && $hasCarTotal) {
+      $sumCar = $conn->query("
+        SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot
+        FROM compras_cargos WHERE id_compra={$id}
+      ")->fetch_assoc();
+    } else {
+      $exprSub = "COALESCE(SUM(monto),0)";
+      $exprIva = $hasCarIVAp ? "COALESCE(SUM(monto * (IFNULL(iva_porcentaje,0)/100)),0)" : "0";
+      $sumCar = $conn->query("SELECT {$exprSub} AS sub, {$exprIva} AS iva FROM compras_cargos WHERE id_compra={$id}")->fetch_assoc();
+      $sumCar['tot'] = (float)$sumCar['sub'] + (float)$sumCar['iva'];
+    }
+  } else {
+    $sumCar = ['sub'=>0,'iva'=>0,'tot'=>0];
+  }
 
   // Ingresos con IMEI/series (si existe la tabla)
   $imeiRows = [];
-  $candDynamic = ['imei1','imei','imei2','serial','n_serie','lote','id_producto','creado_en']; // detectamos estas si existen
-  if (table_exists($conn, 'compras_detalle_ingresos')) {
+  $candDynamic = ['imei1','imei','imei2','serial','n_serie','lote','id_producto','creado_en'];
+  if ($hasTblIngresos) {
     $present = [];
     foreach ($candDynamic as $c) if (column_exists($conn,'compras_detalle_ingresos',$c)) $present[]=$c;
-
     $selectImeis = "";
     foreach ($present as $c) $selectImeis .= ", i.`{$c}` AS `{$c}`";
-
     $sqlI = "
       SELECT i.id, i.id_detalle {$selectImeis},
              d.marca, d.modelo, d.color, d.ram, d.capacidad
@@ -113,8 +156,10 @@ if (isset($_GET['excel'])) {
       WHERE d.id_compra={$id}
       ORDER BY i.id ASC
     ";
-    $resI = $conn->query($sqlI);
-    if ($resI) while($x=$resI->fetch_assoc()) $imeiRows[]=$x;
+    if ($present) {
+      $resI = $conn->query($sqlI);
+      if ($resI) while($x=$resI->fetch_assoc()) $imeiRows[]=$x;
+    }
   }
 
   // Nombre de archivo
@@ -126,7 +171,6 @@ if (isset($_GET['excel'])) {
   header("Content-Disposition: attachment; filename=\"{$fname}\"");
   header("Cache-Control: max-age=0, no-cache, no-store, must-revalidate");
 
-  // Salida HTML (Excel-friendly) + clase .text para forzar texto (IMEI/series)
   echo "<html><head><meta charset='UTF-8'><title>".h($fname)."</title>"
       ."<style>.text{mso-number-format:'\\@';}</style></head><body>";
 
@@ -141,10 +185,10 @@ if (isset($_GET['excel'])) {
   echo "<tr><th align='left'>Días vencimiento</th><td>".(int)($enc['dias_vencimiento'] ?? 0)."</td></tr>";
   echo "<tr><th align='left'>Estatus</th><td>".h($enc['estatus'] ?? '')."</td></tr>";
   echo "<tr><th align='left'>Total factura</th><td>".number_format((float)$enc['total'],2,'.','')."</td></tr>";
-  echo "</table>";
-  echo "<br>";
+  echo "</table><br>";
 
   // === Detalle de modelos
+  $unitKey = $unitCol ?: ''; // para mostrar precio unitario
   echo "<h3>Detalle de modelos</h3>";
   echo "<table border='1' cellspacing='0' cellpadding='4'>";
   echo "<tr>
@@ -153,20 +197,27 @@ if (isset($_GET['excel'])) {
           <th>PrecioUnit</th><th>IVA%</th><th>Subtotal</th><th>IVA</th><th>Total</th>
         </tr>";
   foreach ($detRows as $r) {
+    $qty  = (int)($r['cantidad'] ?? 0);
+    $pu   = $unitKey ? (float)($r[$unitKey] ?? 0) : 0;
+    $ivap = $hasIVAp ? (float)($r['iva_porcentaje'] ?? 0) : (float)($r['iva_porcentaje'] ?? 0);
+    $sub  = $hasSubCol ? (float)($r['subtotal'] ?? 0) : ($qty * $pu);
+    $iva  = $hasIvaCol ? (float)($r['iva'] ?? 0) : ($sub * ($ivap/100));
+    $tot  = $hasTotCol ? (float)($r['total'] ?? 0) : ($sub + $iva);
+
     echo "<tr>";
-    echo "<td>".h($r['marca'])."</td>";
-    echo "<td>".h($r['modelo'])."</td>";
-    echo "<td>".h($r['color'])."</td>";
+    echo "<td>".h($r['marca'] ?? '')."</td>";
+    echo "<td>".h($r['modelo'] ?? '')."</td>";
+    echo "<td>".h($r['color'] ?? '')."</td>";
     echo "<td>".h($r['ram'] ?? '')."</td>";
-    echo "<td>".h($r['capacidad'])."</td>";
-    echo "<td>".(($r['requiere_imei']??0)?'Sí':'No')."</td>";
-    echo "<td>".(int)$r['cantidad']."</td>";
-    echo "<td>".(int)$r['ingresadas']."</td>";
-    echo "<td>".number_format((float)$r['precio_unitario'],2,'.','')."</td>";
-    echo "<td>".number_format((float)$r['iva_porcentaje'],2,'.','')."</td>";
-    echo "<td>".number_format((float)$r['subtotal'],2,'.','')."</td>";
-    echo "<td>".number_format((float)$r['iva'],2,'.','')."</td>";
-    echo "<td>".number_format((float)$r['total'],2,'.','')."</td>";
+    echo "<td>".h($r['capacidad'] ?? '')."</td>";
+    echo "<td>".((int)($r['requiere_imei'] ?? 0) ? 'Sí':'No')."</td>";
+    echo "<td>".$qty."</td>";
+    echo "<td>".(int)($r['ingresadas'] ?? 0)."</td>";
+    echo "<td>".number_format($pu,2,'.','')."</td>";
+    echo "<td>".number_format($ivap,2,'.','')."</td>";
+    echo "<td>".number_format($sub,2,'.','')."</td>";
+    echo "<td>".number_format($iva,2,'.','')."</td>";
+    echo "<td>".number_format($tot,2,'.','')."</td>";
     echo "</tr>";
   }
   echo "<tr><th colspan='10' align='right'>Subtotal (modelos)</th><th>".number_format((float)$sumDet['sub'],2,'.','')."</th><th colspan='2'></th></tr>";
@@ -175,9 +226,8 @@ if (isset($_GET['excel'])) {
   echo "</table>";
 
   // === Otros cargos (totales)
-  if ($sumCar && ((float)$sumCar['tot'])>0) {
-    echo "<br>";
-    echo "<h3>Otros cargos</h3>";
+  if ($hasTblCargos && ((float)$sumCar['tot'])>0) {
+    echo "<br><h3>Otros cargos</h3>";
     echo "<table border='1' cellspacing='0' cellpadding='4'>";
     echo "<tr><th>Subtotal (cargos)</th><td>".number_format((float)$sumCar['sub'],2,'.','')."</td></tr>";
     echo "<tr><th>IVA (cargos)</th><td>".number_format((float)$sumCar['iva'],2,'.','')."</td></tr>";
@@ -185,22 +235,14 @@ if (isset($_GET['excel'])) {
     echo "</table>";
   }
 
-  // === Ingresos con IMEIs/series (IMEIs como TEXTO)
+  // === Ingresos con IMEIs/series
   if (!empty($imeiRows)) {
-    echo "<br>";
-    echo "<h3>Ingresos (IMEI / series) de esta factura</h3>";
+    echo "<br><h3>Ingresos (IMEI / series) de esta factura</h3>";
     echo "<table border='1' cellspacing='0' cellpadding='4'><tr>";
     echo "<th>#</th><th>Marca</th><th>Modelo</th><th>Color</th><th>RAM</th><th>Capacidad</th>";
-
-    // Encabezados dinámicos
-    foreach ($candDynamic as $c) {
-      if (array_key_exists($c, $imeiRows[0])) echo "<th>".strtoupper($c)."</th>";
-    }
+    foreach ($candDynamic as $c) if (array_key_exists($c, $imeiRows[0])) echo "<th>".strtoupper($c)."</th>";
     echo "</tr>";
-
-    // columnas que deben ir como texto
     $imeisComoTexto = ['imei1','imei','imei2','serial','n_serie','lote'];
-
     $n=1;
     foreach ($imeiRows as $x) {
       echo "<tr>";
@@ -226,7 +268,7 @@ if (isset($_GET['excel'])) {
   exit;
 }
 
-// (Navbar se incluye después del handler de Excel, para no romper headers)
+// (Navbar se incluye después del handler de Excel)
 include 'navbar.php';
 
 /* ============================
@@ -241,14 +283,16 @@ $enc = $conn->query("
 ")->fetch_assoc();
 if (!$enc) die("Compra no encontrada.");
 
+// detalle con ingresadas opcional
+$ingresadasExpr = $hasTblIngresos ? "(SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id)" : "0";
 $det = $conn->query("
-  SELECT d.*
-       , (SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id) AS ingresadas
+  SELECT d.*, {$ingresadasExpr} AS ingresadas
   FROM compras_detalle d
   WHERE d.id_compra=$id
   ORDER BY id ASC
 ");
 
+// pagos
 $pagos = $conn->query("
   SELECT id, fecha_pago, monto, metodo_pago, referencia, notas, creado_en
   FROM compras_pagos
@@ -260,26 +304,51 @@ $rowSum = $conn->query("SELECT COALESCE(SUM(monto),0) AS pagado FROM compras_pag
 $totalPagado = (float)$rowSum['pagado'];
 $saldo = max(0, (float)$enc['total'] - $totalPagado);
 
-// Otros cargos y sumas
-$cargos = $conn->query("
-  SELECT id, descripcion, monto, iva_porcentaje, iva_monto, total, afecta_costo, creado_en
-  FROM compras_cargos
-  WHERE id_compra=$id
-  ORDER BY id ASC
-");
+// cargos (si existe tabla)
+if ($hasTblCargos) {
+  $cargos = $conn->query("
+    SELECT id, descripcion, monto, ".($hasCarIVAp?'iva_porcentaje':'0')." AS iva_porcentaje,
+           ".($hasCarIvaMonto?'iva_monto':'(monto * (IFNULL('.($hasCarIVAp?'iva_porcentaje':'0').",0)/100))")." AS iva_monto,
+           ".($hasCarTotal?'total':'(monto + (monto * (IFNULL('.($hasCarIVAp?'iva_porcentaje':'0').",0)/100)))")." AS total,
+           ".(column_exists($conn,'compras_cargos','afecta_costo')?'afecta_costo':'0')." AS afecta_costo,
+           ".(column_exists($conn,'compras_cargos','creado_en')?'creado_en':"NULL")." AS creado_en
+    FROM compras_cargos
+    WHERE id_compra=$id
+    ORDER BY id ASC
+  ");
+  // sumas cargos
+  if ($hasCarIvaMonto && $hasCarTotal) {
+    $sumCar = $conn->query("
+      SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot
+      FROM compras_cargos WHERE id_compra=$id
+    ")->fetch_assoc();
+  } else {
+    $sumCar = $conn->query("
+      SELECT COALESCE(SUM(monto),0) AS sub,
+             ".($hasCarIVAp?"COALESCE(SUM(monto*(IFNULL(iva_porcentaje,0)/100)),0)":"0")." AS iva
+      FROM compras_cargos WHERE id_compra=$id
+    ")->fetch_assoc();
+    $sumCar['tot'] = (float)$sumCar['sub'] + (float)$sumCar['iva'];
+  }
+} else {
+  $cargos = false;
+  $sumCar = ['sub'=>0,'iva'=>0,'tot'=>0];
+}
 
-$sumDet = $conn->query("
-  SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot
-  FROM compras_detalle WHERE id_compra=$id
-")->fetch_assoc();
-
-$sumCar = $conn->query("
-  SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot
-  FROM compras_cargos WHERE id_compra=$id
-")->fetch_assoc();
+// sumas detalle
+if ($hasSubCol && $hasIvaCol && $hasTotCol) {
+  $sumDet = $conn->query("
+    SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot
+    FROM compras_detalle WHERE id_compra=$id
+  ")->fetch_assoc();
+} else {
+  $exprSub = $unitCol ? "COALESCE(SUM(cantidad * {$unitCol}),0)" : "0";
+  $exprIva = ($unitCol && $hasIVAp) ? "COALESCE(SUM(cantidad * {$unitCol} * (IFNULL(iva_porcentaje,0)/100)),0)" : "0";
+  $sumDet = $conn->query("SELECT {$exprSub} AS sub, {$exprIva} AS iva FROM compras_detalle WHERE id_compra=$id")->fetch_assoc();
+  $sumDet['tot'] = (float)$sumDet['sub'] + (float)$sumDet['iva'];
+}
 ?>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 
 <div class="container my-4">
 
@@ -324,7 +393,7 @@ $sumCar = $conn->query("
           <th class="text-center">Req. IMEI</th>
           <th class="text-end">Cant.</th>
           <th class="text-end">Ingresadas</th>
-          <th class="text-end">P.Unit</th>
+          <th class="text-end"><?= $unitCol ? ($unitCol==='costo_unitario'?'C.Unit':'P.Unit') : 'Unitario' ?></th>
           <th class="text-end">IVA%</th>
           <th class="text-end">Subtotal</th>
           <th class="text-end">IVA</th>
@@ -334,21 +403,28 @@ $sumCar = $conn->query("
       </thead>
       <tbody>
       <?php while($r=$det->fetch_assoc()):
-        $pend = max(0, (int)$r['cantidad'] - (int)$r['ingresadas']); ?>
+        $qty  = (int)($r['cantidad'] ?? 0);
+        $pu   = $unitCol ? (float)($r[$unitCol] ?? 0) : 0;
+        $ivap = $hasIVAp ? (float)($r['iva_porcentaje'] ?? 0) : (float)($r['iva_porcentaje'] ?? 0);
+        $sub  = $hasSubCol ? (float)($r['subtotal'] ?? 0) : ($qty * $pu);
+        $iva  = $hasIvaCol ? (float)($r['iva'] ?? 0) : ($sub * ($ivap/100));
+        $tot  = $hasTotCol ? (float)($r['total'] ?? 0) : ($sub + $iva);
+        $ing  = (int)($r['ingresadas'] ?? 0);
+        $pend = max(0, $qty - $ing); ?>
         <tr class="<?= $pend>0 ? 'table-warning' : 'table-success' ?>">
-          <td><?= h($r['marca']) ?></td>
-          <td><?= h($r['modelo']) ?></td>
-          <td><?= h($r['color']) ?></td>
+          <td><?= h($r['marca'] ?? '') ?></td>
+          <td><?= h($r['modelo'] ?? '') ?></td>
+          <td><?= h($r['color'] ?? '') ?></td>
           <td><?= h($r['ram'] ?? '') ?></td>
-          <td><?= h($r['capacidad']) ?></td>
-          <td class="text-center"><?= $r['requiere_imei'] ? 'Sí' : 'No' ?></td>
-          <td class="text-end"><?= (int)$r['cantidad'] ?></td>
-          <td class="text-end"><?= (int)$r['ingresadas'] ?></td>
-          <td class="text-end">$<?= number_format((float)$r['precio_unitario'],2) ?></td>
-          <td class="text-end"><?= number_format((float)$r['iva_porcentaje'],2) ?></td>
-          <td class="text-end">$<?= number_format((float)$r['subtotal'],2) ?></td>
-          <td class="text-end">$<?= number_format((float)$r['iva'],2) ?></td>
-          <td class="text-end">$<?= number_format((float)$r['total'],2) ?></td>
+          <td><?= h($r['capacidad'] ?? '') ?></td>
+          <td class="text-center"><?= (int)($r['requiere_imei'] ?? 0) ? 'Sí' : 'No' ?></td>
+          <td class="text-end"><?= $qty ?></td>
+          <td class="text-end"><?= $ing ?></td>
+          <td class="text-end">$<?= number_format($pu,2) ?></td>
+          <td class="text-end"><?= number_format($ivap,2) ?></td>
+          <td class="text-end">$<?= number_format($sub,2) ?></td>
+          <td class="text-end">$<?= number_format($iva,2) ?></td>
+          <td class="text-end">$<?= number_format($tot,2) ?></td>
           <td class="text-end">
             <?php if ($pend>0): ?>
               <a class="btn btn-sm btn-primary" href="compras_ingreso.php?detalle=<?= (int)$r['id'] ?>&compra=<?= $id ?>">Ingresar</a>
@@ -383,7 +459,7 @@ $sumCar = $conn->query("
   <div class="card shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <strong>Otros cargos</strong>
-      <?php if ($cargos && $cargos->num_rows > 0): ?>
+      <?php if ($hasTblCargos && $cargos && $cargos->num_rows > 0): ?>
         <span class="text-muted small">
           Subtotal: $<?= number_format((float)$sumCar['sub'],2) ?> ·
           IVA: $<?= number_format((float)$sumCar['iva'],2) ?> ·
@@ -392,7 +468,7 @@ $sumCar = $conn->query("
       <?php endif; ?>
     </div>
     <div class="card-body">
-      <?php if ($cargos && $cargos->num_rows > 0): ?>
+      <?php if ($hasTblCargos && $cargos && $cargos->num_rows > 0): ?>
         <div class="table-responsive">
           <table class="table table-sm table-bordered align-middle">
             <thead class="table-light">
@@ -499,7 +575,9 @@ $sumCar = $conn->query("
       >+ Agregar pago</button>
     </div>
     <div class="card-body">
-      <?php if ($pagos && $pagos->num_rows > 0): ?>
+      <?php
+      $hayPagos = ($pagos && $pagos->num_rows > 0);
+      if ($hayPagos): ?>
         <div class="table-responsive">
           <table class="table table-sm table-hover align-middle">
             <thead>
@@ -582,3 +660,6 @@ $sumCar = $conn->query("
   </div>
 
 </div>
+
+<!-- Bundle JS de Bootstrap para que funcione el modal -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
