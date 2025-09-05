@@ -33,7 +33,9 @@ $finSemana    = $finObj->format('Y-m-d');
 
 /* ==============================
    Ejecutivos (solo Propias)
-   FIX: combo -> 2 solo en MIN(dv.id); demás dv=0
+   FIX: combo -> 2 solo en MIN(dv.id); MiFi/Modem fuera
+   FIX: ventas $ desde cabecera v.precio_venta (una vez por venta en MIN dv)
+   + SIM Prepago / SIM Pospago desde ventas_sims
 ================================= */
 $sqlEjecutivos = "
     SELECT 
@@ -61,7 +63,33 @@ $sqlEjecutivos = "
                 ELSE 1
             END
         ),0) AS unidades,
-        IFNULL(SUM(dv.precio_unitario),0) AS total_ventas
+        IFNULL(SUM(
+            CASE 
+                WHEN v.id IS NULL THEN 0
+                WHEN dv.id IS NULL THEN 0
+                WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id)
+                    THEN IFNULL(v.precio_venta,0)
+                ELSE 0
+            END
+        ),0) AS total_ventas,
+
+        /* ===== SIMS: por usuario en semana ===== */
+        (
+          SELECT COUNT(*)
+          FROM ventas_sims vs
+          WHERE vs.id_usuario = u.id
+            AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+            AND LOWER(vs.tipo_venta) LIKE '%pospago%'
+        ) AS sims_pospago,
+        (
+          SELECT COUNT(*)
+          FROM ventas_sims vs
+          WHERE vs.id_usuario = u.id
+            AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+            AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
+            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
+        ) AS sims_prepago
+
     FROM usuarios u
     INNER JOIN sucursales s ON s.id = u.id_sucursal
     LEFT JOIN ventas v 
@@ -74,7 +102,18 @@ $sqlEjecutivos = "
     ORDER BY unidades DESC, total_ventas DESC
 ";
 $stmt = $conn->prepare($sqlEjecutivos);
-$stmt->bind_param("ssss", $inicioSemana, $finSemana, $inicioSemana, $finSemana);
+/* Bind:
+   1-2  cuota_ejecutivo ventana
+   3-4  sims_pospago
+   5-6  sims_prepago
+   7-8  ventas (cabecera)
+*/
+$stmt->bind_param("ssssssss", 
+    $inicioSemana, $finSemana,     // cuota_ejecutivo
+    $inicioSemana, $finSemana,     // sims_pospago
+    $inicioSemana, $finSemana,     // sims_prepago
+    $inicioSemana, $finSemana      // ventas cabecera
+);
 $stmt->execute();
 $resEjecutivos = $stmt->get_result();
 
@@ -84,13 +123,18 @@ while ($row = $resEjecutivos->fetch_assoc()) {
     $row['total_ventas']    = (float)$row['total_ventas'];
     $row['cuota_ejecutivo'] = (int)$row['cuota_ejecutivo'];
     $row['cumplimiento']    = $row['cuota_ejecutivo']>0 ? ($row['unidades']/$row['cuota_ejecutivo']*100) : 0;
+    $row['sims_prepago']    = (int)$row['sims_prepago'];
+    $row['sims_pospago']    = (int)$row['sims_pospago'];
     $rankingEjecutivos[]    = $row;
 }
 $top3Ejecutivos = array_slice(array_column($rankingEjecutivos, 'id'), 0, 3);
 
 /* ==============================
    Sucursales (Propias)
-   FIX: combo -> 2 solo en MIN(dv.id); demás dv=0
+   FIX: combo -> 2 solo en MIN(dv.id); MiFi/Modem fuera
+   FIX: ventas $ desde cabecera v.precio_venta (una vez por venta en MIN dv)
+   Orden: monto DESC
+   + SIM Prepago / SIM Pospago desde ventas_sims
 ================================= */
 $sqlSucursalesPropias = "
     SELECT s.id AS id_sucursal,
@@ -114,10 +158,36 @@ $sqlSucursalesPropias = "
                     ELSE 1
                 END
            ),0) AS unidades,
-           IFNULL(SUM(CASE WHEN dv.id IS NULL OR LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0 ELSE dv.precio_unitario END),0) AS total_ventas
+           IFNULL(SUM(
+                CASE
+                    WHEN v.id IS NULL THEN 0
+                    WHEN dv.id IS NULL THEN 0
+                    WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id)
+                        THEN IFNULL(v.precio_venta,0)
+                    ELSE 0
+                END
+           ),0) AS total_ventas,
+
+           /* ===== SIMS: por sucursal en semana ===== */
+           (
+             SELECT COUNT(*)
+             FROM ventas_sims vs
+             WHERE vs.id_sucursal = s.id
+               AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+               AND LOWER(vs.tipo_venta) LIKE '%pospago%'
+           ) AS sims_pospago,
+           (
+             SELECT COUNT(*)
+             FROM ventas_sims vs
+             WHERE vs.id_sucursal = s.id
+               AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+               AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
+               AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
+           ) AS sims_prepago
+
     FROM sucursales s
     LEFT JOIN (
-        SELECT v.id, v.id_sucursal, v.fecha_venta, v.tipo_venta
+        SELECT v.id, v.id_sucursal, v.fecha_venta, v.tipo_venta, v.precio_venta
         FROM ventas v
         WHERE DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
     ) v ON v.id_sucursal = s.id
@@ -128,7 +198,18 @@ $sqlSucursalesPropias = "
     ORDER BY total_ventas DESC
 ";
 $stmt2 = $conn->prepare($sqlSucursalesPropias);
-$stmt2->bind_param("sss", $inicioSemana, $inicioSemana, $finSemana);
+/* Bind:
+   1    cuota_semanal lookup (usa solo inicio)
+   2-3  sims_pospago
+   4-5  sims_prepago
+   6-7  ventas cabecera ventana
+*/
+$stmt2->bind_param("sssssss", 
+    $inicioSemana,             // cuota_semanal
+    $inicioSemana, $finSemana, // sims_pospago
+    $inicioSemana, $finSemana, // sims_prepago
+    $inicioSemana, $finSemana  // ventas cabecera
+);
 $stmt2->execute();
 $resSucursalesPropias = $stmt2->get_result();
 
@@ -136,12 +217,13 @@ $sucursales = [];
 $totalUnidadesPropias = 0;
 $totalVentasPropias   = 0;
 $totalCuotaPropias    = 0;
-
 while ($row = $resSucursalesPropias->fetch_assoc()) {
     $row['unidades']      = (int)$row['unidades'];
     $row['total_ventas']  = (float)$row['total_ventas'];
     $row['cuota_semanal'] = (float)$row['cuota_semanal'];
     $row['cumplimiento']  = $row['cuota_semanal']>0 ? ($row['total_ventas']/$row['cuota_semanal']*100) : 0;
+    $row['sims_prepago']  = (int)$row['sims_prepago'];
+    $row['sims_pospago']  = (int)$row['sims_pospago'];
 
     $sucursales[]          = $row;
     $totalUnidadesPropias += $row['unidades'];
@@ -152,7 +234,9 @@ $porcentajeGlobalPropias = $totalCuotaPropias>0 ? ($totalVentasPropias/$totalCuo
 
 /* ==============================
    Sucursales (Master Admin) — SIN cuota
-   (esta ya tenía el patrón anti-duplicado para 'nano' en monto; lo replicamos en unidades)
+   (incluye patrón anti-duplicado nano en monto y unidades)
+   Orden: monto DESC
+   + SIM Prepago / SIM Pospago desde ventas_sims
 ================================= */
 $sqlSucursalesMA = "
     SELECT 
@@ -160,7 +244,7 @@ $sqlSucursalesMA = "
         s.nombre AS sucursal,
         s.subtipo AS subtipo,
 
-        -- Unidades (FIX nano: una sola vez por venta)
+        -- Unidades (nano por venta; combo=2 una sola vez)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
@@ -181,23 +265,33 @@ $sqlSucursalesMA = "
             END
         ),0) AS unidades,
 
-        -- Monto (ya con anti-duplicado nano)
+        -- Monto (cabecera v.precio_venta una vez en MIN dv)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
-                WHEN v.origen_ma='nano' THEN
-                    CASE 
-                        WHEN dv.id IS NULL THEN IFNULL(v.precio_venta,0)
-                        WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id) THEN IFNULL(v.precio_venta,0)
-                        ELSE 0
-                    END
-                ELSE
-                    CASE 
-                        WHEN dv.id IS NULL OR LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                        ELSE IFNULL(dv.precio_unitario,0)
-                    END
+                WHEN dv.id IS NULL THEN 0
+                WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta = v.id)
+                    THEN IFNULL(v.precio_venta,0)
+                ELSE 0
             END
-        ),0) AS total_ventas
+        ),0) AS total_ventas,
+
+        /* ===== SIMS: por sucursal MA en semana ===== */
+        (
+          SELECT COUNT(*)
+          FROM ventas_sims vs
+          WHERE vs.id_sucursal = s.id
+            AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+            AND LOWER(vs.tipo_venta) LIKE '%pospago%'
+        ) AS sims_pospago,
+        (
+          SELECT COUNT(*)
+          FROM ventas_sims vs
+          WHERE vs.id_sucursal = s.id
+            AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+            AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
+            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
+        ) AS sims_prepago
 
     FROM sucursales s
     LEFT JOIN ventas v
@@ -210,7 +304,16 @@ $sqlSucursalesMA = "
     ORDER BY total_ventas DESC
 ";
 $stmtMA = $conn->prepare($sqlSucursalesMA);
-$stmtMA->bind_param("ss", $inicioSemana, $finSemana);
+/* Bind:
+   1-2 sims_pospago
+   3-4 sims_prepago
+   5-6 ventas cabecera
+*/
+$stmtMA->bind_param("ssssss", 
+    $inicioSemana, $finSemana,  // sims_pospago
+    $inicioSemana, $finSemana,  // sims_prepago
+    $inicioSemana, $finSemana   // ventas cabecera
+);
 $stmtMA->execute();
 $resSucursalesMA = $stmtMA->get_result();
 
@@ -220,175 +323,83 @@ $totalVentasMA   = 0;
 while ($row = $resSucursalesMA->fetch_assoc()) {
     $row['unidades']      = (int)$row['unidades'];
     $row['total_ventas']  = (float)$row['total_ventas'];
+    $row['sims_prepago']  = (int)$row['sims_prepago'];
+    $row['sims_pospago']  = (int)$row['sims_pospago'];
     $sucursalesMA[]       = $row;
     $totalUnidadesMA     += $row['unidades'];
     $totalVentasMA       += $row['total_ventas'];
 }
 
 /* ==========================================================
-   Serie semanal (mar–lun) por sucursal — SOLO FILTRO DEL GRÁFICO
-   g=propias | ma | todas
-   FIX: mismo criterio anti-duplicado para combos y nano
+   GRÁFICO: BARRAS (ACUMULADO SEMANAL POR MONTO)
+   Toggle g=propias | ma en la esquina del card
 ========================================================== */
-$g = $_GET['g'] ?? 'todas';
+$g = $_GET['g'] ?? 'propias';
+if ($g !== 'propias' && $g !== 'ma') { $g = 'propias'; }
 
-// labels de la semana
-$labelsSemanaISO = [];
-$labelsSemanaVis = [];
-$diasES = [1=>'Lun','Mar','Mié','Jue','Vie','Sáb','Dom']; // 1=Lun ... 7=Dom
-$cur = clone $inicioObj;
-for ($i=0; $i<7; $i++) {
-    $labelsSemanaISO[] = $cur->format('Y-m-d');
-    $labelsSemanaVis[] = $diasES[(int)$cur->format('N')] . ' ' . $cur->format('d/m');
-    $cur->modify('+1 day');
-}
-
-$whereBase = "s.tipo_sucursal='Tienda'";
 if ($g === 'propias') {
-    $whereBase .= " AND s.subtipo='Propia'";
-} elseif ($g === 'ma') {
-    $whereBase .= " AND s.subtipo='Master Admin'";
-}
-
-if ($g === 'ma') {
-    // MA: nano cuenta por venta (MIN dv) y combo=2 una sola vez
-    $sqlWeek = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
-           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
-           SUM(
-             CASE
-               WHEN v.id IS NULL THEN 0
-               WHEN COALESCE(v.origen_ma,'propio')='nano' THEN
-                    CASE
-                      WHEN dv.id IS NULL THEN
-                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
-                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN
-                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
-                      ELSE 0
-                    END
-               ELSE
-                    CASE
-                      WHEN dv.id IS NULL THEN 0
-                      WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                      ELSE 1
-                    END
-             END
-           ) AS unidades
-    FROM sucursales s
-    LEFT JOIN ventas v
-      ON v.id_sucursal = s.id
-     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-    LEFT JOIN productos p      ON p.id       = dv.id_producto
-    WHERE $whereBase
-    GROUP BY s.id, dia
+    $sqlChart = "
+      SELECT s.nombre AS sucursal,
+             SUM(
+               CASE
+                 WHEN v.id IS NULL THEN 0
+                 WHEN dv.id IS NULL THEN 0
+                 WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
+                      THEN IFNULL(v.precio_venta,0)
+                 ELSE 0
+               END
+             ) AS total_ventas
+      FROM sucursales s
+      LEFT JOIN ventas v
+        ON v.id_sucursal = s.id
+       AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+      LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+      WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia'
+      GROUP BY s.id
     ";
-} elseif ($g === 'propias') {
-    // Propias: combo=2 solo en MIN(dv), resto 0
-    $sqlWeek = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
-           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
-           SUM(
-             CASE 
-               WHEN dv.id IS NULL THEN 0
-               WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-               WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
-                    CASE 
-                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
-                      ELSE 0
-                    END
-               ELSE 1
-             END
-           ) AS unidades
-    FROM sucursales s
-    LEFT JOIN ventas v
-      ON v.id_sucursal = s.id
-     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-    LEFT JOIN productos p ON p.id = dv.id_producto
-    WHERE $whereBase
-    GROUP BY s.id, dia
-    ";
-} else { // todas
-    // Mezcla: MA nano por venta; resto como Propias (combo=2 solo en MIN)
-    $sqlWeek = "
-    SELECT s.id AS id_sucursal, s.nombre AS sucursal,
-           DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) AS dia,
-           SUM(
-             CASE
-               WHEN v.id IS NULL THEN 0
-               WHEN s.subtipo='Master Admin' AND COALESCE(v.origen_ma,'propio')='nano' THEN
-                    CASE
-                      WHEN dv.id IS NULL THEN
-                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
-                      WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN
-                        CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
-                      ELSE 0
-                    END
-               ELSE
-                    CASE
-                      WHEN dv.id IS NULL THEN 0
-                      WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
-                      WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
-                           CASE 
-                             WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id) THEN 2
-                             ELSE 0
-                           END
-                      ELSE 1
-                    END
-             END
-           ) AS unidades
-    FROM sucursales s
-    LEFT JOIN ventas v
-      ON v.id_sucursal = s.id
-     AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-    LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-    LEFT JOIN productos p ON p.id = dv.id_producto
-    WHERE s.tipo_sucursal='Tienda'
-    GROUP BY s.id, dia
+} else { // ma
+    $sqlChart = "
+      SELECT s.nombre AS sucursal,
+             SUM(
+               CASE
+                 WHEN v.id IS NULL THEN 0
+                 WHEN dv.id IS NULL THEN 0
+                 WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta=v.id)
+                      THEN IFNULL(v.precio_venta,0)
+                 ELSE 0
+               END
+             ) AS total_ventas
+      FROM sucursales s
+      LEFT JOIN ventas v
+        ON v.id_sucursal = s.id
+       AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+      LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+      WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
+      GROUP BY s.id
     ";
 }
+$stmtC = $conn->prepare($sqlChart);
+$stmtC->bind_param("ss", $inicioSemana, $finSemana);
+$stmtC->execute();
+$resChart = $stmtC->get_result();
 
-$stmtW = $conn->prepare($sqlWeek);
-$stmtW->bind_param("ss", $inicioSemana, $finSemana);
-$stmtW->execute();
-$resW = $stmtW->get_result();
+$rowsChart = [];
+while ($r = $resChart->fetch_assoc()) {
+    $r['total_ventas'] = (float)$r['total_ventas'];
+    $rowsChart[] = $r;
+}
+usort($rowsChart, fn($a,$b) => $b['total_ventas'] <=> $a['total_ventas']);
+$top = array_slice($rowsChart, 0, 15);
+$otrasVal = 0;
+for ($i=15; $i<count($rowsChart); $i++) { $otrasVal += $rowsChart[$i]['total_ventas']; }
 
-// Construir datasets del gráfico
-$weekSeries = [];   // [sucursal => [dateISO=>unid]]
-while ($r = $resW->fetch_assoc()) {
-    $suc = $r['sucursal'];
-    $dia = $r['dia'];
-    $u   = (int)$r['unidades'];
-    if ($dia) {
-        if (!isset($weekSeries[$suc])) $weekSeries[$suc] = [];
-        $weekSeries[$suc][$dia] = $u;
-    }
-}
-$datasetsWeek = [];
-// labels de la semana
-$labelsSemanaISO = [];
-$labelsSemanaVis = [];
-$diasES = [1=>'Lun','Mar','Mié','Jue','Vie','Sáb','Dom']; // 1=Lun ... 7=Dom
-$cur = clone $inicioObj;
-for ($i=0; $i<7; $i++) {
-    $labelsSemanaISO[] = $cur->format('Y-m-d');
-    $labelsSemanaVis[] = $diasES[(int)$cur->format('N')] . ' ' . $cur->format('d/m');
-    $cur->modify('+1 day');
-}
-foreach ($weekSeries as $sucursalNombre => $serie) {
-    $row = [];
-    foreach ($labelsSemanaISO as $d) {
-        $row[] = isset($serie[$d]) ? (int)$serie[$d] : 0;
-    }
-    $datasetsWeek[] = [
-        'label'        => $sucursalNombre,
-        'data'         => $row,
-        'tension'      => 0.3,
-        'borderWidth'  => 2,
-        'pointRadius'  => 2
-    ];
-}
+$labelsGraf = array_map(fn($r)=>$r['sucursal'],$top);
+$dataGraf   = array_map(fn($r)=>round($r['total_ventas'],2),$top);
+if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
+
+/* ==============================
+   HTML
+================================= */
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -416,15 +427,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
             <option value="<?= $i ?>" <?= $i==$semanaSeleccionada?'selected':'' ?>><?= $texto ?></option>
             <?php endfor; ?>
         </select>
-
-        <!-- Filtro SOLO para el gráfico -->
-        <?php $g = $_GET['g'] ?? 'todas'; ?>
-        <label class="me-2"><strong>Gráfico:</strong></label>
-        <select name="g" class="form-select w-auto d-inline-block me-2" onchange="this.form.submit()">
-            <option value="todas"   <?= $g==='todas'?'selected':'' ?>>Todas</option>
-            <option value="propias" <?= $g==='propias'?'selected':'' ?>>Propias</option>
-            <option value="ma"      <?= $g==='ma'?'selected':'' ?>>Master Admin</option>
-        </select>
+        <!-- preservar el grupo al cambiar semana -->
+        <input type="hidden" name="g" value="<?= htmlspecialchars($g) ?>">
     </form>
 
     <!-- Tarjetas: Propias | Master Admin | Global (Propias) -->
@@ -486,17 +490,25 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
         </div>
     </div>
 
-    <!-- Gráfica semanal -->
+    <!-- Gráfica semanal (barras, monto) -->
     <div class="card shadow mb-4">
-        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-          <span>Comportamiento Semanal por Sucursal (mar–lun)</span>
-          <small class="text-white-50">Grupo gráfico: <strong><?= strtoupper(htmlspecialchars($g)) ?></strong></small>
+        <div class="card-header bg-dark text-white position-relative d-flex align-items-center">
+          <span>Resumen semanal por sucursal (monto)</span>
+          <!-- Toggle en esquina -->
+          <div class="position-absolute top-50 end-0 translate-middle-y pe-2">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Grupo gráfico">
+              <a class="btn <?= $g==='propias'?'btn-primary':'btn-outline-light' ?>"
+                 href="?semana=<?= $semanaSeleccionada ?>&g=propias">Propias</a>
+              <a class="btn <?= $g==='ma'?'btn-primary':'btn-outline-light' ?>"
+                 href="?semana=<?= $semanaSeleccionada ?>&g=ma">Master Admin</a>
+            </div>
+          </div>
         </div>
         <div class="card-body">
-            <div style="position:relative; height:260px;">
+            <div style="position:relative; height:320px;">
                 <canvas id="chartSemanal"></canvas>
             </div>
-            <small class="text-muted d-block mt-2">* Toca los nombres en la leyenda para ocultar/mostrar sucursales.</small>
+            <small class="text-muted d-block mt-2">* Se muestran Top-15 sucursales por monto semanal + “Otras”.</small>
         </div>
     </div>
 
@@ -525,6 +537,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <th>Sucursal</th>
                                 <th>Tipo</th>
                                 <th>Unidades</th>
+                                <th>SIM Prepago</th>
+                                <th>SIM Pospago</th>
                                 <th>Cuota $</th>
                                 <th>Ventas $</th>
                                 <th>% Cumplimiento</th>
@@ -541,6 +555,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <td><?= htmlspecialchars($s['sucursal']) ?></td>
                                 <td><?= htmlspecialchars($s['subtipo']) ?></td>
                                 <td><?= (int)$s['unidades'] ?></td>
+                                <td><?= (int)$s['sims_prepago'] ?></td>
+                                <td><?= (int)$s['sims_pospago'] ?></td>
                                 <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
                                 <td>$<?= number_format($s['total_ventas'],2) ?></td>
                                 <td><?= $cumpl ?>% <?= $estado ?></td>
@@ -570,6 +586,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <th>Sucursal</th>
                                 <th>Tipo</th>
                                 <th>Unidades</th>
+                                <th>SIM Prepago</th>
+                                <th>SIM Pospago</th>
                                 <th>Ventas $</th>
                                 <th>% Cumplimiento</th>
                                 <th>Progreso</th>
@@ -588,6 +606,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <td><?= htmlspecialchars($r['sucursal']) ?></td>
                                 <td><?= htmlspecialchars($r['subtipo']) ?></td>
                                 <td><?= (int)$r['unidades'] ?></td>
+                                <td><?= (int)$r['sims_prepago'] ?></td>
+                                <td><?= (int)$r['sims_pospago'] ?></td>
                                 <td>$<?= number_format($r['total_ventas'],2) ?></td>
                                 <td><?= $cumpl ?>% <?= $estado ?></td>
                                 <td>
@@ -615,6 +635,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <th>Sucursal</th>
                                 <th>Tipo</th>
                                 <th>Unidades</th>
+                                <th>SIM Prepago</th>
+                                <th>SIM Pospago</th>
                                 <th>Ventas $</th>
                             </tr>
                         </thead>
@@ -624,6 +646,8 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
                                 <td><?= htmlspecialchars($s['sucursal']) ?></td>
                                 <td><?= htmlspecialchars($s['subtipo']) ?></td>
                                 <td><?= (int)$s['unidades'] ?></td>
+                                <td><?= (int)$s['sims_prepago'] ?></td>
+                                <td><?= (int)$s['sims_pospago'] ?></td>
                                 <td>$<?= number_format($s['total_ventas'],2) ?></td>
                             </tr>
                             <?php endforeach;?>
@@ -636,21 +660,36 @@ foreach ($weekSeries as $sucursalNombre => $serie) {
     </div>
 </div>
 
-<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-const labelsSemana = <?= json_encode($labelsSemanaVis, JSON_UNESCAPED_UNICODE) ?>;
-const datasetsWeek = <?= json_encode($datasetsWeek, JSON_UNESCAPED_UNICODE) ?>;
+const labelsGraf = <?= json_encode($labelsGraf, JSON_UNESCAPED_UNICODE) ?>;
+const dataGraf   = <?= json_encode($dataGraf, JSON_UNESCAPED_UNICODE) ?>;
 
 new Chart(document.getElementById('chartSemanal').getContext('2d'), {
-  type: 'line',
-  data: { labels: labelsSemana, datasets: datasetsWeek },
+  type: 'bar',
+  data: { labels: labelsGraf, datasets: [{
+    label: 'Ventas ($)',
+    data: dataGraf,
+    borderWidth: 0,
+    maxBarThickness: 28,
+    categoryPercentage: 0.8,
+    barPercentage: 0.9
+  }]},
   options: {
     responsive: true,
     maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
-    plugins: { title: { display: false }, legend: { position: 'bottom' } },
-    scales: { y: { beginAtZero: true, title: { display: true, text: 'Unidades' } } }
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: (ctx) => ` Ventas: $${Number(ctx.parsed.y).toLocaleString()}` } }
+    },
+    scales: {
+      x: { ticks: { autoSkip: false, maxRotation: 45, minRotation: 45 } },
+      y: {
+        beginAtZero: true,
+        ticks: { callback: (v) => '$' + Number(v).toLocaleString() },
+        title: { display: true, text: 'Ventas ($)' }
+      }
+    }
   }
 });
 </script>
