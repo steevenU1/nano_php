@@ -274,6 +274,7 @@ $stmt->close();
 <head>
   <meta charset="UTF-8">
   <title>Venta SIM Pospago</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- 🔹 móvil -->
 
   <!-- Bootstrap 5 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
@@ -311,6 +312,32 @@ $stmt->close();
     .list-compact{margin:0; padding-left:1rem;}
     .list-compact li{margin-bottom:.25rem;}
     .readonly-hint{background:#f1f5f9;}
+
+    /* 🔹 barra de acción fija móvil */
+    .mobile-action{
+      position: fixed; left:0; right:0; bottom:0; z-index:1040;
+      background: rgba(255,255,255,.96);
+      backdrop-filter: saturate(140%) blur(6px);
+      border-top: 1px solid rgba(0,0,0,.06);
+      padding: .75rem .9rem;
+      box-shadow: 0 -8px 24px rgba(2,8,20,.06);
+    }
+
+    @media (max-width: 576px){
+      .container { padding-left: .8rem; padding-right: .8rem; }
+      .page-title { font-size:1.15rem; }
+      .card .card-header { padding: .55rem .8rem; font-size: .95rem; }
+      .card .card-body { padding: .9rem; }
+      .card-elev .card-body { padding: 1rem; }
+      .card .card-footer { padding: .8rem; }
+      label.form-label{ font-size: .9rem; }
+      .form-control, .form-select{ font-size:.95rem; padding:.55rem .7rem; border-radius:.6rem; }
+      .select2-container { width:100% !important; }
+      .help-text{ font-size:.82rem; }
+      .btn { border-radius:.7rem; }
+      .btn-lg { padding:.8rem 1rem; font-size:1rem; }
+      .alert { font-size:.95rem; }
+    }
   </style>
 
   <script>
@@ -338,8 +365,7 @@ $stmt->close();
 
 <?php include 'navbar.php'; ?>
 
-<div class="container my-4">
-
+<div class="container my-4 pb-5"><!-- pb para que no tape la barra fija -->
   <?php if ($flash === 'sim_ok'): ?>
     <div class="alert alert-success">✅ SIM pospago agregada a tu inventario y preseleccionada.</div>
   <?php elseif ($flash === 'sim_dup'): ?>
@@ -349,10 +375,12 @@ $stmt->close();
   <?php endif; ?>
 
   <div class="d-flex align-items-center justify-content-between mb-3">
-    <div>
+    <div class="me-2">
       <h2 class="page-title mb-1"><i class="bi bi-sim me-2"></i>Venta de SIM Pospago</h2>
       <div class="help-text">Completa los datos y confirma en el modal antes de enviar.</div>
     </div>
+    <a href="panel.php" class="btn btn-outline-secondary d-none d-sm-inline-flex"><i class="bi bi-arrow-left me-1"></i> Volver</a>
+    <a href="panel.php" class="btn btn-outline-secondary d-inline-flex d-sm-none"><i class="bi bi-arrow-left"></i></a>
   </div>
 
   <!-- Contexto de sesión -->
@@ -375,22 +403,21 @@ $stmt->close();
       <div class="section-title"><i class="bi bi-collection"></i> Selección de SIM</div>
 
       <div class="form-check mb-3">
-        <input class="form-check-input" type="checkbox" id="es_esim" name="es_esim" onchange="toggleSimSelect()">
-        <label class="form-check-label">Es eSIM (no afecta inventario)</label>
+        <input class="form-check-input" type="checkbox" id="es_esim" name="es_esim" onchange="toggleSimSelect()" />
+        <label class="form-check-label" for="es_esim">Es eSIM (no afecta inventario)</label>
       </div>
 
       <!-- SIM Física con buscador -->
       <div class="row g-3 mb-3" id="sim_fisica">
-        <div class="col-md-7">
-          <label class="form-label">SIM física disponible</label>
+        <div class="col-md-7 col-12">
+          <label class="form-label" for="id_sim">SIM física disponible</label>
           <select name="id_sim" id="id_sim" class="form-select select2-sims">
             <option value="">-- Selecciona SIM --</option>
             <?php while($row = $disponibles->fetch_assoc()): ?>
               <option value="<?= (int)$row['id'] ?>"
                       data-iccid="<?= htmlspecialchars($row['iccid']) ?>"
                       data-operador="<?= htmlspecialchars($row['operador']) ?>"
-                      <?= ($selSimId && $selSimId==(int)$row['id']) ? 'selected' : '' ?>
-              >
+                      <?= ($selSimId && $selSimId==(int)$row['id']) ? 'selected' : '' ?>>
                 <?= htmlspecialchars($row['iccid']) ?> | <?= htmlspecialchars($row['operador']) ?> | Caja: <?= htmlspecialchars($row['caja_id']) ?> | Ingreso: <?= htmlspecialchars($row['fecha_ingreso']) ?>
               </option>
             <?php endwhile; ?>
@@ -405,8 +432,8 @@ $stmt->close();
         </div>
 
         <!-- Operador solo lectura -->
-        <div class="col-md-5">
-          <label class="form-label">Operador (solo lectura)</label>
+        <div class="col-md-5 col-12">
+          <label class="form-label" for="tipoSimView">Operador (solo lectura)</label>
           <input type="text" id="tipoSimView" class="form-control readonly-hint" value="" readonly>
         </div>
       </div>
@@ -415,8 +442,8 @@ $stmt->close();
 
       <div class="section-title"><i class="bi bi-receipt"></i> Datos de la venta</div>
       <div class="row g-3 mb-3">
-        <div class="col-md-3">
-          <label class="form-label">Plan pospago</label>
+        <div class="col-md-3 col-12">
+          <label class="form-label" for="plan">Plan pospago</label>
           <select name="plan" id="plan" class="form-select" onchange="setPrecio()" required>
             <option value="">-- Selecciona plan --</option>
             <?php foreach($planesPospago as $planNombre => $precioP): ?>
@@ -424,12 +451,12 @@ $stmt->close();
             <?php endforeach; ?>
           </select>
         </div>
-        <div class="col-md-2">
-          <label class="form-label">Precio/Plan</label>
-          <input type="number" step="0.01" id="precio" name="precio" class="form-control" readonly>
+        <div class="col-md-2 col-6">
+          <label class="form-label" for="precio">Precio/Plan</label>
+          <input type="number" step="0.01" id="precio" name="precio" class="form-control" readonly inputmode="decimal">
         </div>
-        <div class="col-md-3">
-          <label class="form-label">Modalidad</label>
+        <div class="col-md-3 col-6">
+          <label class="form-label" for="modalidad">Modalidad</label>
           <select name="modalidad" id="modalidad" class="form-select" onchange="toggleEquipo()" required>
             <option value="Sin equipo">Sin equipo</option>
             <option value="Con equipo">Con equipo</option>
@@ -437,8 +464,8 @@ $stmt->close();
         </div>
 
         <!-- Relacionar venta de equipo (solo del mismo día) -->
-        <div class="col-md-4" id="venta_equipo" style="display:none;">
-          <label class="form-label">Relacionar venta de equipo (hoy)</label>
+        <div class="col-md-4 col-12" id="venta_equipo" style="display:none;">
+          <label class="form-label" for="id_venta_equipo">Relacionar venta de equipo (hoy)</label>
           <select name="id_venta_equipo" id="id_venta_equipo" class="form-select select2-ventas">
             <option value="">-- Selecciona venta --</option>
             <?php while($ve = $ventasEquipos->fetch_assoc()): ?>
@@ -461,27 +488,34 @@ $stmt->close();
 
       <div class="section-title"><i class="bi bi-person-vcard"></i> Datos del cliente</div>
       <div class="row g-3 mb-3">
-        <div class="col-md-4">
-          <label class="form-label">Nombre del cliente</label>
-          <input type="text" name="nombre_cliente" id="nombre_cliente" class="form-control" required>
+        <div class="col-md-4 col-12">
+          <label class="form-label" for="nombre_cliente">Nombre del cliente</label>
+          <input type="text" name="nombre_cliente" id="nombre_cliente" class="form-control" required autocomplete="name">
         </div>
-        <div class="col-md-3">
-          <label class="form-label">Número telefónico</label>
-          <input type="text" name="numero_cliente" id="numero_cliente" class="form-control" required placeholder="10 dígitos">
+        <div class="col-md-3 col-12">
+          <label class="form-label" for="numero_cliente">Número telefónico</label>
+          <input type="text" name="numero_cliente" id="numero_cliente" class="form-control" required placeholder="10 dígitos" inputmode="numeric" autocomplete="tel">
         </div>
-        <div class="col-md-5">
-          <label class="form-label">Comentarios</label>
-          <input type="text" name="comentarios" id="comentarios" class="form-control">
+        <div class="col-md-5 col-12">
+          <label class="form-label" for="comentarios">Comentarios</label>
+          <input type="text" name="comentarios" id="comentarios" class="form-control" autocomplete="off">
         </div>
       </div>
 
     </div>
-    <div class="card-footer bg-white border-0 p-3">
+    <div class="card-footer bg-white border-0 p-3 d-none d-sm-block">
       <button type="submit" class="btn btn-gradient text-white w-100 py-2" id="btn_submit">
         <i class="bi bi-check2-circle me-2"></i> Registrar Venta Pospago
       </button>
     </div>
   </form>
+</div>
+
+<!-- 🔹 Botón fijo móvil -->
+<div class="mobile-action d-sm-none">
+  <button type="button" class="btn btn-gradient text-white w-100 btn-lg" id="btn_submit_mobile">
+    <i class="bi bi-check2-circle me-2"></i> Registrar Venta Pospago
+  </button>
 </div>
 
 <!-- Modal: Alta rápida de SIM (Pospago) -->
@@ -492,7 +526,7 @@ $stmt->close();
         <h5 class="modal-title"><i class="bi bi-sim me-2 text-primary"></i>Alta de SIM a inventario (Pospago)</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
       </div>
-      <form method="POST" id="formAltaSimPospago">
+      <form method="POST" id="formAltaSimPospago" novalidate>
         <input type="hidden" name="accion" value="alta_sim_pospago">
         <div class="modal-body">
           <div class="alert alert-secondary py-2">
@@ -500,12 +534,12 @@ $stmt->close();
           </div>
 
           <div class="mb-3">
-            <label class="form-label">ICCID</label>
-            <input type="text" name="iccid" id="alta_iccid" class="form-control" placeholder="8952140063250341909F" maxlength="20" required>
+            <label class="form-label" for="alta_iccid">ICCID</label>
+            <input type="text" name="iccid" id="alta_iccid" class="form-control" placeholder="8952140063250341909F" maxlength="20" required inputmode="latin" autocomplete="off">
             <div class="form-text">Formato: 19 dígitos + 1 letra mayúscula.</div>
           </div>
           <div class="mb-3">
-            <label class="form-label">Operador</label>
+            <label class="form-label" for="alta_operador">Operador</label>
             <select name="operador" id="alta_operador" class="form-select" required>
               <option value="">-- Selecciona --</option>
               <option value="Bait">Bait</option>
@@ -513,12 +547,12 @@ $stmt->close();
             </select>
           </div>
           <div class="mb-3">
-            <label class="form-label">DN (10 dígitos) <span class="text-muted">(opcional)</span></label>
-            <input type="text" name="dn" id="alta_dn" class="form-control" placeholder="5512345678">
+            <label class="form-label" for="alta_dn">DN (10 dígitos) <span class="text-muted">(opcional)</span></label>
+            <input type="text" name="dn" id="alta_dn" class="form-control" placeholder="5512345678" inputmode="numeric" autocomplete="off">
           </div>
           <div class="mb-2">
-            <label class="form-label">Caja ID (opcional)</label>
-            <input type="text" name="caja_id" id="alta_caja" class="form-control" placeholder="Etiqueta/caja">
+            <label class="form-label" for="alta_caja">Caja ID (opcional)</label>
+            <input type="text" name="caja_id" id="alta_caja" class="form-control" placeholder="Etiqueta/caja" autocomplete="off">
           </div>
 
           <?php if ($flash==='sim_err' && !empty($_GET['e'])): ?>
@@ -625,12 +659,12 @@ $(function(){
     placeholder: '-- Selecciona SIM --',
     width: '100%',
     language: { noResults: () => 'Sin resultados', searching: () => 'Buscando…' }
-  });
+  }).on('select2:select', function(){ $(this).blur(); });
   $('.select2-ventas').select2({
     placeholder: '-- Selecciona venta --',
     width: '100%',
     language: { noResults: () => 'Sin resultados', searching: () => 'Buscando…' }
-  });
+  }).on('select2:select', function(){ $(this).blur(); });
 
   // Inicializar toggles
   toggleSimSelect();
@@ -655,7 +689,6 @@ $(function(){
     if (!plan) errs.push('Selecciona un plan.');
     if (isNaN(precio) || precio <= 0) errs.push('El precio/plan es inválido o 0.');
 
-    // Si NO es eSIM, la SIM física es opcional (tu backend lo permite). No forzamos required.
     const num = ($numero.val() || '').trim();
     if (num && !/^\d{10}$/.test(num)) errs.push('El número del cliente debe tener 10 dígitos.');
 
@@ -703,20 +736,29 @@ $(function(){
   }
 
   let allowSubmit = false;
+
+  // Submit normal (desktop): intercepta, muestra modal
   $form.on('submit', function(e){
     if (allowSubmit) return; // ya confirmado
     e.preventDefault();
     const errs = validar();
     if (errs.length){
-      alert('Corrige lo siguiente:\\n• ' + errs.join('\\n• '));
+      alert('Corrige lo siguiente:\n• ' + errs.join('\n• '));
       return;
     }
     poblarModal();
     modalConfirm.show();
   });
 
+  // Botón fijo móvil: invoca el mismo flujo
+  $('#btn_submit_mobile').on('click', function(e){
+    e.preventDefault();
+    $form.trigger('submit');
+  });
+
+  // Confirmación -> envía
   $('#btn_confirmar_envio').on('click', function(){
-    $('#btn_submit').prop('disabled', true).text('Enviando...');
+    $('#btn_submit, #btn_submit_mobile').prop('disabled', true).text('Enviando...');
     allowSubmit = true;
     modalConfirm.hide();
     $form[0].submit();

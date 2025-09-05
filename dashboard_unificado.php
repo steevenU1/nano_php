@@ -32,10 +32,7 @@ $inicioSemana = $inicioObj->format('Y-m-d');
 $finSemana    = $finObj->format('Y-m-d');
 
 /* ==============================
-   Ejecutivos (solo Propias)
-   FIX: combo -> 2 solo en MIN(dv.id); MiFi/Modem fuera
-   FIX: ventas $ desde cabecera v.precio_venta (una vez por venta en MIN dv)
-   + SIM Prepago / SIM Pospago desde ventas_sims
+   Ejecutivos (Propias) + SIMs
 ================================= */
 $sqlEjecutivos = "
     SELECT 
@@ -72,24 +69,15 @@ $sqlEjecutivos = "
                 ELSE 0
             END
         ),0) AS total_ventas,
-
-        /* ===== SIMS: por usuario en semana ===== */
-        (
-          SELECT COUNT(*)
-          FROM ventas_sims vs
-          WHERE vs.id_usuario = u.id
+        (SELECT COUNT(*) FROM ventas_sims vs
+          WHERE vs.id_usuario=u.id
             AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-            AND LOWER(vs.tipo_venta) LIKE '%pospago%'
-        ) AS sims_pospago,
-        (
-          SELECT COUNT(*)
-          FROM ventas_sims vs
-          WHERE vs.id_usuario = u.id
+            AND LOWER(vs.tipo_venta) LIKE '%pospago%') AS sims_pospago,
+        (SELECT COUNT(*) FROM ventas_sims vs
+          WHERE vs.id_usuario=u.id
             AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
             AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
-            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
-        ) AS sims_prepago
-
+            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%') AS sims_prepago
     FROM usuarios u
     INNER JOIN sucursales s ON s.id = u.id_sucursal
     LEFT JOIN ventas v 
@@ -102,12 +90,6 @@ $sqlEjecutivos = "
     ORDER BY unidades DESC, total_ventas DESC
 ";
 $stmt = $conn->prepare($sqlEjecutivos);
-/* Bind:
-   1-2  cuota_ejecutivo ventana
-   3-4  sims_pospago
-   5-6  sims_prepago
-   7-8  ventas (cabecera)
-*/
 $stmt->bind_param("ssssssss", 
     $inicioSemana, $finSemana,     // cuota_ejecutivo
     $inicioSemana, $finSemana,     // sims_pospago
@@ -130,11 +112,7 @@ while ($row = $resEjecutivos->fetch_assoc()) {
 $top3Ejecutivos = array_slice(array_column($rankingEjecutivos, 'id'), 0, 3);
 
 /* ==============================
-   Sucursales (Propias)
-   FIX: combo -> 2 solo en MIN(dv.id); MiFi/Modem fuera
-   FIX: ventas $ desde cabecera v.precio_venta (una vez por venta en MIN dv)
-   Orden: monto DESC
-   + SIM Prepago / SIM Pospago desde ventas_sims
+   Sucursales (Propias) + SIMs
 ================================= */
 $sqlSucursalesPropias = "
     SELECT s.id AS id_sucursal,
@@ -167,24 +145,15 @@ $sqlSucursalesPropias = "
                     ELSE 0
                 END
            ),0) AS total_ventas,
-
-           /* ===== SIMS: por sucursal en semana ===== */
-           (
-             SELECT COUNT(*)
-             FROM ventas_sims vs
-             WHERE vs.id_sucursal = s.id
+           (SELECT COUNT(*) FROM ventas_sims vs
+             WHERE vs.id_sucursal=s.id
                AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-               AND LOWER(vs.tipo_venta) LIKE '%pospago%'
-           ) AS sims_pospago,
-           (
-             SELECT COUNT(*)
-             FROM ventas_sims vs
-             WHERE vs.id_sucursal = s.id
+               AND LOWER(vs.tipo_venta) LIKE '%pospago%') AS sims_pospago,
+           (SELECT COUNT(*) FROM ventas_sims vs
+             WHERE vs.id_sucursal=s.id
                AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
                AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
-               AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
-           ) AS sims_prepago
-
+               AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%') AS sims_prepago
     FROM sucursales s
     LEFT JOIN (
         SELECT v.id, v.id_sucursal, v.fecha_venta, v.tipo_venta, v.precio_venta
@@ -198,17 +167,11 @@ $sqlSucursalesPropias = "
     ORDER BY total_ventas DESC
 ";
 $stmt2 = $conn->prepare($sqlSucursalesPropias);
-/* Bind:
-   1    cuota_semanal lookup (usa solo inicio)
-   2-3  sims_pospago
-   4-5  sims_prepago
-   6-7  ventas cabecera ventana
-*/
 $stmt2->bind_param("sssssss", 
-    $inicioSemana,             // cuota_semanal
-    $inicioSemana, $finSemana, // sims_pospago
-    $inicioSemana, $finSemana, // sims_prepago
-    $inicioSemana, $finSemana  // ventas cabecera
+    $inicioSemana,
+    $inicioSemana, $finSemana,
+    $inicioSemana, $finSemana,
+    $inicioSemana, $finSemana
 );
 $stmt2->execute();
 $resSucursalesPropias = $stmt2->get_result();
@@ -233,18 +196,13 @@ while ($row = $resSucursalesPropias->fetch_assoc()) {
 $porcentajeGlobalPropias = $totalCuotaPropias>0 ? ($totalVentasPropias/$totalCuotaPropias)*100 : 0;
 
 /* ==============================
-   Sucursales (Master Admin) — SIN cuota
-   (incluye patrón anti-duplicado nano en monto y unidades)
-   Orden: monto DESC
-   + SIM Prepago / SIM Pospago desde ventas_sims
+   Master Admin + SIMs
 ================================= */
 $sqlSucursalesMA = "
     SELECT 
         s.id AS id_sucursal,
         s.nombre AS sucursal,
         s.subtipo AS subtipo,
-
-        -- Unidades (nano por venta; combo=2 una sola vez)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
@@ -264,8 +222,6 @@ $sqlSucursalesMA = "
                     END
             END
         ),0) AS unidades,
-
-        -- Monto (cabecera v.precio_venta una vez en MIN dv)
         IFNULL(SUM(
             CASE 
                 WHEN v.id IS NULL THEN 0
@@ -275,24 +231,15 @@ $sqlSucursalesMA = "
                 ELSE 0
             END
         ),0) AS total_ventas,
-
-        /* ===== SIMS: por sucursal MA en semana ===== */
-        (
-          SELECT COUNT(*)
-          FROM ventas_sims vs
-          WHERE vs.id_sucursal = s.id
+        (SELECT COUNT(*) FROM ventas_sims vs
+          WHERE vs.id_sucursal=s.id
             AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-            AND LOWER(vs.tipo_venta) LIKE '%pospago%'
-        ) AS sims_pospago,
-        (
-          SELECT COUNT(*)
-          FROM ventas_sims vs
-          WHERE vs.id_sucursal = s.id
+            AND LOWER(vs.tipo_venta) LIKE '%pospago%') AS sims_pospago,
+        (SELECT COUNT(*) FROM ventas_sims vs
+          WHERE vs.id_sucursal=s.id
             AND DATE(CONVERT_TZ(vs.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
             AND LOWER(vs.tipo_venta) NOT LIKE '%pospago%'
-            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%'
-        ) AS sims_prepago
-
+            AND LOWER(vs.tipo_venta) NOT LIKE '%regalo%') AS sims_prepago
     FROM sucursales s
     LEFT JOIN ventas v
            ON v.id_sucursal = s.id
@@ -304,15 +251,10 @@ $sqlSucursalesMA = "
     ORDER BY total_ventas DESC
 ";
 $stmtMA = $conn->prepare($sqlSucursalesMA);
-/* Bind:
-   1-2 sims_pospago
-   3-4 sims_prepago
-   5-6 ventas cabecera
-*/
 $stmtMA->bind_param("ssssss", 
-    $inicioSemana, $finSemana,  // sims_pospago
-    $inicioSemana, $finSemana,  // sims_prepago
-    $inicioSemana, $finSemana   // ventas cabecera
+    $inicioSemana, $finSemana,
+    $inicioSemana, $finSemana,
+    $inicioSemana, $finSemana
 );
 $stmtMA->execute();
 $resSucursalesMA = $stmtMA->get_result();
@@ -331,8 +273,7 @@ while ($row = $resSucursalesMA->fetch_assoc()) {
 }
 
 /* ==========================================================
-   GRÁFICO: BARRAS (ACUMULADO SEMANAL POR MONTO)
-   Toggle g=propias | ma en la esquina del card
+   GRÁFICO
 ========================================================== */
 $g = $_GET['g'] ?? 'propias';
 if ($g !== 'propias' && $g !== 'ma') { $g = 'propias'; }
@@ -357,7 +298,7 @@ if ($g === 'propias') {
       WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia'
       GROUP BY s.id
     ";
-} else { // ma
+} else {
     $sqlChart = "
       SELECT s.nombre AS sucursal,
              SUM(
@@ -392,7 +333,6 @@ usort($rowsChart, fn($a,$b) => $b['total_ventas'] <=> $a['total_ventas']);
 $top = array_slice($rowsChart, 0, 15);
 $otrasVal = 0;
 for ($i=15; $i<count($rowsChart); $i++) { $otrasVal += $rowsChart[$i]['total_ventas']; }
-
 $labelsGraf = array_map(fn($r)=>$r['sucursal'],$top);
 $dataGraf   = array_map(fn($r)=>round($r['total_ventas'],2),$top);
 if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
@@ -406,45 +346,66 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
 <head>
     <meta charset="UTF-8">
     <title>Dashboard Semanal Nano</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- móvil -->
     <link rel="icon" type="image/x-icon" href="./img/favicon.ico">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+      /* ——— Toques móviles elegantes ——— */
+      .navbar { box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+      @media (max-width: 576px){
+        .container { padding-left: .6rem; padding-right: .6rem; }
+        h2 { font-size: 1.15rem; }
+        .card .card-header { padding: .5rem .75rem; font-size: .9rem; }
+        .card .card-body { padding: .75rem; }
+        .nav-tabs { overflow-x: auto; overflow-y: hidden; white-space: nowrap; flex-wrap: nowrap; }
+        .nav-tabs .nav-link { padding: .5rem .75rem; }
+        .chart-wrap { height: 240px; } /* chart más compacto en móvil */
+        .sticky-mobile-bar {
+          position: sticky; top: 0; z-index: 1030; background: #fff; padding:.5rem .75rem;
+          border-bottom: 1px solid rgba(0,0,0,.06);
+        }
+        .form-select, .btn { font-size: .9rem; }
+        .table th, .table td { padding: .45rem .5rem; font-size: .86rem; }
+      }
+      /* Progreso compacto */
+      .progress{height:20px}
+      .progress-bar{font-size:.75rem}
+    </style>
 </head>
 <body class="bg-light">
 
 <?php include 'navbar.php'; ?>
 
-<div class="container mt-4">
-    <h2>📊 Dashboard Semanal Nano</h2>
-
-    <!-- Selector de semana (global, no toca tablas) -->
-    <form method="GET" class="mb-3">
-        <label class="me-2"><strong>Semana:</strong></label>
-        <select name="semana" class="form-select w-auto d-inline-block me-3" onchange="this.form.submit()">
-            <?php for ($i=0; $i<8; $i++):
-                list($ini, $fin) = obtenerSemanaPorIndice($i);
-                $texto = "Del {$ini->format('d/m/Y')} al {$fin->format('d/m/Y')}";
-            ?>
-            <option value="<?= $i ?>" <?= $i==$semanaSeleccionada?'selected':'' ?>><?= $texto ?></option>
-            <?php endfor; ?>
+<div class="container mt-3">
+    <!-- Sticky filtro semana en móvil -->
+    <div class="sticky-mobile-bar rounded-3 shadow-sm d-md-none mb-3">
+      <form method="GET" class="d-flex gap-2 align-items-center">
+        <label class="mb-0"><strong>Semana:</strong></label>
+        <select name="semana" class="form-select form-select-sm" onchange="this.form.submit()">
+          <?php for ($i=0; $i<8; $i++):
+              list($ini, $fin) = obtenerSemanaPorIndice($i);
+              $texto = "{$ini->format('d/m')}–{$fin->format('d/m')}";
+          ?>
+          <option value="<?= $i ?>" <?= $i==$semanaSeleccionada?'selected':'' ?>><?= $texto ?></option>
+          <?php endfor; ?>
         </select>
-        <!-- preservar el grupo al cambiar semana -->
         <input type="hidden" name="g" value="<?= htmlspecialchars($g) ?>">
-    </form>
+      </form>
+    </div>
 
-    <!-- Tarjetas: Propias | Master Admin | Global (Propias) -->
-    <div class="row mb-4">
-        <!-- Propias -->
-        <div class="col-md-4 mb-3">
-            <div class="card shadow text-center">
+    <h2 class="d-none d-md-block">📊 Dashboard Semanal Nano</h2>
+
+    <!-- Tarjetas -->
+    <div class="row mb-3 g-3">
+        <div class="col-12 col-md-4">
+            <div class="card shadow text-center h-100">
                 <div class="card-header bg-dark text-white">Propias</div>
                 <div class="card-body">
-                    <h5><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
-                    <p class="mb-2">
-                        Unidades: <?= $totalUnidadesPropias ?><br>
-                        Ventas: $<?= number_format($totalVentasPropias,2) ?><br>
-                        Cuota: $<?= number_format($totalCuotaPropias,2) ?>
-                    </p>
-                    <div class="progress" style="height:20px">
+                    <h5 class="mb-2"><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
+                    <div class="small text-muted mb-2">
+                        Unidades: <?= $totalUnidadesPropias ?> · Ventas: $<?= number_format($totalVentasPropias,2) ?> · Cuota: $<?= number_format($totalCuotaPropias,2) ?>
+                    </div>
+                    <div class="progress">
                         <div class="progress-bar <?= $porcentajeGlobalPropias>=100?'bg-success':($porcentajeGlobalPropias>=60?'bg-warning':'bg-danger') ?>"
                              style="width:<?= min(100,$porcentajeGlobalPropias) ?>%">
                             <?= number_format(min(100,$porcentajeGlobalPropias),1) ?>%
@@ -453,48 +414,30 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 </div>
             </div>
         </div>
-
-        <!-- Master Admin -->
-        <div class="col-md-4 mb-3">
-            <div class="card shadow text-center">
+        <div class="col-6 col-md-4">
+            <div class="card shadow text-center h-100">
                 <div class="card-header bg-secondary text-white">Master Admin</div>
                 <div class="card-body">
-                    <h5>Sin cuota</h5>
-                    <p class="mb-0">
-                        Unidades: <?= $totalUnidadesMA ?><br>
-                        Ventas: $<?= number_format($totalVentasMA,2) ?>
-                    </p>
+                    <h6 class="mb-2">Sin cuota</h6>
+                    <div class="small text-muted">Unidades: <?= $totalUnidadesMA ?> · Ventas: $<?= number_format($totalVentasMA,2) ?></div>
                 </div>
             </div>
         </div>
-
-        <!-- Global (Propias) -->
-        <div class="col-md-4 mb-3">
-            <div class="card shadow text-center">
+        <div class="col-6 col-md-4">
+            <div class="card shadow text-center h-100">
                 <div class="card-header bg-primary text-white">🌐 Global (Propias)</div>
                 <div class="card-body">
-                    <h5><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
-                    <p class="mb-2">
-                        Unidades: <?= $totalUnidadesPropias ?><br>
-                        Ventas: $<?= number_format($totalVentasPropias,2) ?><br>
-                        Cuota: $<?= number_format($totalCuotaPropias,2) ?>
-                    </p>
-                    <div class="progress" style="height:20px">
-                        <div class="progress-bar <?= $porcentajeGlobalPropias>=100?'bg-success':($porcentajeGlobalPropias>=60?'bg-warning':'bg-danger') ?>"
-                             style="width:<?= min(100,$porcentajeGlobalPropias) ?>%">
-                            <?= number_format(min(100,$porcentajeGlobalPropias),1) ?>%
-                        </div>
-                    </div>
+                    <h5 class="mb-2"><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
+                    <div class="small text-muted">Unidades: <?= $totalUnidadesPropias ?> · Ventas: $<?= number_format($totalVentasPropias,2) ?> · Cuota: $<?= number_format($totalCuotaPropias,2) ?></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Gráfica semanal (barras, monto) -->
-    <div class="card shadow mb-4">
+    <!-- Gráfica semanal -->
+    <div class="card shadow mb-3">
         <div class="card-header bg-dark text-white position-relative d-flex align-items-center">
           <span>Resumen semanal por sucursal (monto)</span>
-          <!-- Toggle en esquina -->
           <div class="position-absolute top-50 end-0 translate-middle-y pe-2">
             <div class="btn-group btn-group-sm" role="group" aria-label="Grupo gráfico">
               <a class="btn <?= $g==='propias'?'btn-primary':'btn-outline-light' ?>"
@@ -505,10 +448,10 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
           </div>
         </div>
         <div class="card-body">
-            <div style="position:relative; height:320px;">
+            <div class="chart-wrap" style="position:relative; height:320px;">
                 <canvas id="chartSemanal"></canvas>
             </div>
-            <small class="text-muted d-block mt-2">* Se muestran Top-15 sucursales por monto semanal + “Otras”.</small>
+            <small class="text-muted d-block mt-2">* Top-15 por monto semanal + “Otras”.</small>
         </div>
     </div>
 
@@ -530,46 +473,48 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
         <div class="tab-pane fade show active" id="sucursales">
             <div class="card mb-4 shadow">
                 <div class="card-header bg-dark text-white">Sucursales (Propias)</div>
-                <div class="card-body">
-                    <table class="table table-striped table-bordered">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                      <table class="table table-striped table-bordered mb-0">
                         <thead class="table-dark">
-                            <tr>
-                                <th>Sucursal</th>
-                                <th>Tipo</th>
-                                <th>Unidades</th>
-                                <th>SIM Prepago</th>
-                                <th>SIM Pospago</th>
-                                <th>Cuota $</th>
-                                <th>Ventas $</th>
-                                <th>% Cumplimiento</th>
-                                <th>Progreso</th>
-                            </tr>
+                          <tr>
+                            <th>Sucursal</th>
+                            <th class="d-none d-md-table-cell">Tipo</th>
+                            <th class="d-none d-md-table-cell">Unidades</th>
+                            <th class="d-none d-md-table-cell">SIM Prepago</th>
+                            <th class="d-none d-md-table-cell">SIM Pospago</th>
+                            <th>Cuota $</th>
+                            <th>Ventas $</th>
+                            <th>% Cumpl.</th>
+                            <th class="d-none d-md-table-cell">Progreso</th>
+                          </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($sucursales as $s):
-                                $cumpl = round($s['cumplimiento'],1);
-                                $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
-                                $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
-                            ?>
-                            <tr class="<?= $fila ?>">
-                                <td><?= htmlspecialchars($s['sucursal']) ?></td>
-                                <td><?= htmlspecialchars($s['subtipo']) ?></td>
-                                <td><?= (int)$s['unidades'] ?></td>
-                                <td><?= (int)$s['sims_prepago'] ?></td>
-                                <td><?= (int)$s['sims_pospago'] ?></td>
-                                <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
-                                <td>$<?= number_format($s['total_ventas'],2) ?></td>
-                                <td><?= $cumpl ?>% <?= $estado ?></td>
-                                <td>
-                                    <div class="progress" style="height:20px">
-                                        <div class="progress-bar <?= $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger') ?>"
-                                            style="width:<?= min(100,$cumpl) ?>%"><?= $cumpl ?>%</div>
-                                    </div>
-                                </td>
-                            </tr>
-                            <?php endforeach;?>
+                          <?php foreach ($sucursales as $s):
+                              $cumpl = round($s['cumplimiento'],1);
+                              $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
+                              $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
+                          ?>
+                          <tr class="<?= $fila ?>">
+                            <td><?= htmlspecialchars($s['sucursal']) ?></td>
+                            <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['subtipo']) ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$s['unidades'] ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
+                            <td>$<?= number_format($s['cuota_semanal'],2) ?></td>
+                            <td>$<?= number_format($s['total_ventas'],2) ?></td>
+                            <td><?= $cumpl ?>% <?= $estado ?></td>
+                            <td class="d-none d-md-table-cell">
+                              <div class="progress">
+                                <div class="progress-bar <?= $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger') ?>"
+                                     style="width:<?= min(100,$cumpl) ?>%"><?= $cumpl ?>%</div>
+                              </div>
+                            </td>
+                          </tr>
+                          <?php endforeach;?>
                         </tbody>
-                    </table>
+                      </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -578,48 +523,50 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
         <div class="tab-pane fade" id="ejecutivos">
             <div class="card mb-4 shadow">
                 <div class="card-header bg-dark text-white">Ejecutivos (Propias)</div>
-                <div class="card-body">
-                    <table class="table table-striped table-bordered">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Ejecutivo</th>
-                                <th>Sucursal</th>
-                                <th>Tipo</th>
-                                <th>Unidades</th>
-                                <th>SIM Prepago</th>
-                                <th>SIM Pospago</th>
-                                <th>Ventas $</th>
-                                <th>% Cumplimiento</th>
-                                <th>Progreso</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($rankingEjecutivos as $r):
-                                $cumpl = round($r['cumplimiento'],1);
-                                $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
-                                $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
-                                $iconTop = in_array($r['id'],$top3Ejecutivos) ? ' 🏆' : '';
-                                $iconCrown = ($cumpl >= 100) ? ' 👑' : '';
-                            ?>
-                            <tr class="<?= $fila ?>">
-                                <td><?= htmlspecialchars($r['nombre']).$iconTop.$iconCrown ?></td>
-                                <td><?= htmlspecialchars($r['sucursal']) ?></td>
-                                <td><?= htmlspecialchars($r['subtipo']) ?></td>
-                                <td><?= (int)$r['unidades'] ?></td>
-                                <td><?= (int)$r['sims_prepago'] ?></td>
-                                <td><?= (int)$r['sims_pospago'] ?></td>
-                                <td>$<?= number_format($r['total_ventas'],2) ?></td>
-                                <td><?= $cumpl ?>% <?= $estado ?></td>
-                                <td>
-                                    <div class="progress" style="height:20px">
-                                        <div class="progress-bar <?= $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger') ?>"
-                                            style="width:<?= min(100,$cumpl) ?>%"><?= $cumpl ?>%</div>
-                                    </div>
-                                </td>
-                            </tr>
-                            <?php endforeach;?>
-                        </tbody>
+                <div class="card-body p-0">
+                  <div class="table-responsive">
+                    <table class="table table-striped table-bordered mb-0">
+                      <thead class="table-dark">
+                        <tr>
+                          <th>Ejecutivo</th>
+                          <th class="d-none d-md-table-cell">Sucursal</th>
+                          <th class="d-none d-md-table-cell">Tipo</th>
+                          <th>Unidades</th>
+                          <th class="d-none d-md-table-cell">SIM Prepago</th>
+                          <th class="d-none d-md-table-cell">SIM Pospago</th>
+                          <th class="d-none d-md-table-cell">Ventas $</th>
+                          <th>% Cumpl.</th>
+                          <th class="d-none d-md-table-cell">Progreso</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <?php foreach ($rankingEjecutivos as $r):
+                            $cumpl = round($r['cumplimiento'],1);
+                            $estado = $cumpl>=100?"✅":($cumpl>=60?"⚠️":"❌");
+                            $fila = $cumpl>=100?"table-success":($cumpl>=60?"table-warning":"table-danger");
+                            $iconTop = in_array($r['id'],$top3Ejecutivos) ? ' 🏆' : '';
+                            $iconCrown = ($cumpl >= 100) ? ' 👑' : '';
+                        ?>
+                        <tr class="<?= $fila ?>">
+                          <td><?= htmlspecialchars($r['nombre']).$iconTop.$iconCrown ?></td>
+                          <td class="d-none d-md-table-cell"><?= htmlspecialchars($r['sucursal']) ?></td>
+                          <td class="d-none d-md-table-cell"><?= htmlspecialchars($r['subtipo']) ?></td>
+                          <td><?= (int)$r['unidades'] ?></td>
+                          <td class="d-none d-md-table-cell"><?= (int)$r['sims_prepago'] ?></td>
+                          <td class="d-none d-md-table-cell"><?= (int)$r['sims_pospago'] ?></td>
+                          <td class="d-none d-md-table-cell">$<?= number_format($r['total_ventas'],2) ?></td>
+                          <td><?= $cumpl ?>% <?= $estado ?></td>
+                          <td class="d-none d-md-table-cell">
+                            <div class="progress">
+                              <div class="progress-bar <?= $cumpl>=100?'bg-success':($cumpl>=60?'bg-warning':'bg-danger') ?>"
+                                   style="width:<?= min(100,$cumpl) ?>%"><?= $cumpl ?>%</div>
+                            </div>
+                          </td>
+                        </tr>
+                        <?php endforeach;?>
+                      </tbody>
                     </table>
+                  </div>
                 </div>
             </div>
         </div>
@@ -628,15 +575,16 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
         <div class="tab-pane fade" id="masteradmin">
             <div class="card mb-4 shadow">
                 <div class="card-header bg-dark text-white">Master Admin (sin cuota)</div>
-                <div class="card-body">
-                    <table class="table table-striped table-bordered">
+                <div class="card-body p-0">
+                  <div class="table-responsive">
+                    <table class="table table-striped table-bordered mb-0">
                         <thead class="table-dark">
                             <tr>
                                 <th>Sucursal</th>
-                                <th>Tipo</th>
+                                <th class="d-none d-md-table-cell">Tipo</th>
                                 <th>Unidades</th>
-                                <th>SIM Prepago</th>
-                                <th>SIM Pospago</th>
+                                <th class="d-none d-md-table-cell">SIM Prepago</th>
+                                <th class="d-none d-md-table-cell">SIM Pospago</th>
                                 <th>Ventas $</th>
                             </tr>
                         </thead>
@@ -644,15 +592,16 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                             <?php foreach ($sucursalesMA as $s): ?>
                             <tr>
                                 <td><?= htmlspecialchars($s['sucursal']) ?></td>
-                                <td><?= htmlspecialchars($s['subtipo']) ?></td>
+                                <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['subtipo']) ?></td>
                                 <td><?= (int)$s['unidades'] ?></td>
-                                <td><?= (int)$s['sims_prepago'] ?></td>
-                                <td><?= (int)$s['sims_pospago'] ?></td>
+                                <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
+                                <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
                                 <td>$<?= number_format($s['total_ventas'],2) ?></td>
                             </tr>
                             <?php endforeach;?>
                         </tbody>
                     </table>
+                  </div>
                 </div>
             </div>
         </div>

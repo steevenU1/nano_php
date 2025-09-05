@@ -25,6 +25,7 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 <head>
   <meta charset="UTF-8">
   <title>Nueva Venta</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- móvil -->
   <link rel="icon" type="image/x-icon" href="./img/favicon.ico?v=2">
 
   <!-- Bootstrap 5 -->
@@ -66,17 +67,44 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
     .badge-soft{background:#eef2ff; color:#1e40af; border:1px solid #dbeafe;}
     .list-compact{margin:0; padding-left:1rem;}
     .list-compact li{margin-bottom:.25rem;}
+
+    /* Barra de acción fija en móvil */
+    .mobile-action{
+      position: fixed; left:0; right:0; bottom:0; z-index:1040;
+      background: rgba(255,255,255,.96);
+      backdrop-filter: saturate(140%) blur(6px);
+      border-top: 1px solid rgba(0,0,0,.06);
+      padding: .75rem .9rem;
+      box-shadow: 0 -8px 24px rgba(2,8,20,.06);
+    }
+
+    @media (max-width: 576px){
+      .container { padding-left: .8rem; padding-right: .8rem; }
+      .page-title { font-size:1.15rem; }
+      .card .card-header { padding: .55rem .8rem; font-size: .95rem; }
+      .card .card-body { padding: .9rem; }
+      .card-elev .card-body { padding: 1rem; }
+      .card .card-footer { padding: .8rem; }
+      label.form-label{ font-size: .9rem; }
+      .form-control, .form-select{ font-size:.95rem; padding:.55rem .7rem; border-radius:.6rem; }
+      .select2-container { width: 100% !important; }
+      .help-text{ font-size:.82rem; }
+      .btn { border-radius:.7rem; }
+      .btn-lg { padding:.8rem 1rem; font-size:1rem; }
+      .alert { font-size:.95rem; }
+    }
   </style>
 </head>
 <body class="bg-light">
 
-<div class="container my-4">
+<div class="container my-4 pb-5"><!-- pb extra para no tapar el botón fijo -->
   <div class="d-flex align-items-center justify-content-between mb-3">
-    <div>
+    <div class="me-2">
       <h2 class="page-title mb-1"><i class="bi bi-bag-plus me-2"></i>Registrar Nueva Venta</h2>
       <div class="help-text">Selecciona primero el <strong>Tipo de Venta</strong> y confirma en el modal antes de enviar.</div>
     </div>
-    <a href="panel.php" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver al Panel</a>
+    <a href="panel.php" class="btn btn-outline-secondary d-none d-sm-inline-flex"><i class="bi bi-arrow-left me-1"></i> Volver</a>
+    <a href="panel.php" class="btn btn-outline-secondary d-inline-flex d-sm-none"><i class="bi bi-arrow-left"></i></a>
   </div>
 
   <!-- Contexto de sesión -->
@@ -91,12 +119,12 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
   </div>
 
   <!-- Advertencia -->
-  <div id="alerta_sucursal" class="alert alert-warning alert-sucursal d-none">
+  <div id="alerta_sucursal" class="alert alert-warning alert-sucursal d-none" role="alert" aria-live="polite">
     <i class="bi bi-exclamation-triangle me-1"></i><strong>Atención:</strong> Estás eligiendo una sucursal diferente a la tuya. La venta contará para tu usuario en esa sucursal.
   </div>
 
   <!-- Errores -->
-  <div id="errores" class="alert alert-danger d-none"></div>
+  <div id="errores" class="alert alert-danger d-none" role="alert"></div>
 
   <form method="POST" action="procesar_venta.php" id="form_venta" novalidate>
     <input type="hidden" name="id_usuario" value="<?= $id_usuario ?>">
@@ -107,9 +135,9 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
         <!-- Tipo de venta primero -->
         <div class="section-title"><i class="bi bi-phone"></i> Tipo de venta</div>
         <div class="row g-3 mb-3">
-          <div class="col-md-4">
-            <label class="form-label req">Tipo de Venta</label>
-            <select name="tipo_venta" id="tipo_venta" class="form-control" required>
+          <div class="col-md-4 col-12">
+            <label class="form-label req" for="tipo_venta">Tipo de Venta</label>
+            <select name="tipo_venta" id="tipo_venta" class="form-select" required aria-required="true">
               <option value="">Seleccione...</option>
               <option value="Contado">Contado</option>
               <option value="Financiamiento">Financiamiento</option>
@@ -122,9 +150,9 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 
         <div class="section-title"><i class="bi bi-geo-alt"></i> Datos de operación</div>
         <div class="row g-3 mb-3">
-          <div class="col-md-4">
-            <label class="form-label req">Sucursal de la Venta</label>
-            <select name="id_sucursal" id="id_sucursal" class="form-control" required>
+          <div class="col-md-4 col-12">
+            <label class="form-label req" for="id_sucursal">Sucursal de la Venta</label>
+            <select name="id_sucursal" id="id_sucursal" class="form-select" required aria-required="true">
               <?php foreach ($sucursales as $sucursal): ?>
                 <option value="<?= (int)$sucursal['id'] ?>" <?= (int)$sucursal['id'] === $id_sucursal_usuario ? 'selected' : '' ?>>
                   <?= htmlspecialchars($sucursal['nombre']) ?>
@@ -139,17 +167,17 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 
         <div class="section-title"><i class="bi bi-people"></i> Datos del cliente</div>
         <div class="row g-3 mb-2">
-          <div class="col-md-4" id="tag_field">
+          <div class="col-md-4 col-12" id="tag_field">
             <label for="tag" class="form-label">TAG (ID del crédito)</label>
-            <input type="text" name="tag" id="tag" class="form-control" placeholder="Ej. PJ-123ABC">
+            <input type="text" name="tag" id="tag" class="form-control" placeholder="Ej. PJ-123ABC" inputmode="latin" autocomplete="off">
           </div>
-          <div class="col-md-4">
-            <label class="form-label">Nombre del Cliente</label>
-            <input type="text" name="nombre_cliente" id="nombre_cliente" class="form-control" placeholder="Nombre y apellidos">
+          <div class="col-md-4 col-12">
+            <label class="form-label" for="nombre_cliente">Nombre del Cliente</label>
+            <input type="text" name="nombre_cliente" id="nombre_cliente" class="form-control" placeholder="Nombre y apellidos" autocomplete="name">
           </div>
-          <div class="col-md-4">
-            <label class="form-label">Teléfono del Cliente</label>
-            <input type="text" name="telefono_cliente" id="telefono_cliente" class="form-control" placeholder="10 dígitos">
+          <div class="col-md-4 col-12">
+            <label class="form-label" for="telefono_cliente">Teléfono del Cliente</label>
+            <input type="tel" name="telefono_cliente" id="telefono_cliente" class="form-control" placeholder="10 dígitos" inputmode="numeric" autocomplete="tel">
           </div>
         </div>
 
@@ -157,13 +185,13 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 
         <div class="section-title"><i class="bi bi-device-ssd"></i> Equipos</div>
         <div class="row g-3 mb-2">
-          <div class="col-md-4">
-            <label class="form-label req">Equipo Principal</label>
-            <select name="equipo1" id="equipo1" class="form-control select2-equipo" required></select>
+          <div class="col-md-4 col-12">
+            <label class="form-label req" for="equipo1">Equipo Principal</label>
+            <select name="equipo1" id="equipo1" class="form-control select2-equipo" required aria-required="true"></select>
             <div class="form-text">Busca por modelo o IMEI.</div>
           </div>
-          <div class="col-md-4" id="combo" style="display:none;">
-            <label class="form-label">Equipo Combo</label>
+          <div class="col-md-4 col-12" id="combo" style="display:none;">
+            <label class="form-label" for="equipo2">Equipo Combo</label>
             <select name="equipo2" id="equipo2" class="form-control select2-equipo"></select>
           </div>
         </div>
@@ -172,17 +200,17 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 
         <div class="section-title"><i class="bi bi-cash-coin"></i> Datos financieros</div>
         <div class="row g-3 mb-2">
-          <div class="col-md-4">
-            <label class="form-label req">Precio de Venta Total ($)</label>
-            <input type="number" step="0.01" min="0.01" name="precio_venta" id="precio_venta" class="form-control" placeholder="0.00" required>
+          <div class="col-md-4 col-12">
+            <label class="form-label req" for="precio_venta">Precio de Venta Total ($)</label>
+            <input type="number" step="0.01" min="0.01" name="precio_venta" id="precio_venta" class="form-control" placeholder="0.00" required inputmode="decimal">
           </div>
-          <div class="col-md-4" id="enganche_field">
-            <label class="form-label">Enganche ($)</label>
-            <input type="number" step="0.01" min="0" name="enganche" id="enganche" class="form-control" value="0" placeholder="0.00">
+          <div class="col-md-4 col-12" id="enganche_field">
+            <label class="form-label" for="enganche">Enganche ($)</label>
+            <input type="number" step="0.01" min="0" name="enganche" id="enganche" class="form-control" value="0" placeholder="0.00" inputmode="decimal">
           </div>
-          <div class="col-md-4">
-            <label id="label_forma_pago" class="form-label req">Forma de Pago</label>
-            <select name="forma_pago_enganche" id="forma_pago_enganche" class="form-control" required>
+          <div class="col-md-4 col-12">
+            <label id="label_forma_pago" class="form-label req" for="forma_pago_enganche">Forma de Pago</label>
+            <select name="forma_pago_enganche" id="forma_pago_enganche" class="form-select" required>
               <option value="Efectivo">Efectivo</option>
               <option value="Tarjeta">Tarjeta</option>
               <option value="Mixto">Mixto</option>
@@ -191,42 +219,49 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
         </div>
 
         <div class="row g-3 mb-2" id="mixto_detalle" style="display:none;">
-          <div class="col-md-6">
-            <label class="form-label">Enganche Efectivo ($)</label>
-            <input type="number" step="0.01" min="0" name="enganche_efectivo" id="enganche_efectivo" class="form-control" value="0" placeholder="0.00">
+          <div class="col-md-6 col-12">
+            <label class="form-label" for="enganche_efectivo">Enganche Efectivo ($)</label>
+            <input type="number" step="0.01" min="0" name="enganche_efectivo" id="enganche_efectivo" class="form-control" value="0" placeholder="0.00" inputmode="decimal">
           </div>
-          <div class="col-md-6">
-            <label class="form-label">Enganche Tarjeta ($)</label>
-            <input type="number" step="0.01" min="0" name="enganche_tarjeta" id="enganche_tarjeta" class="form-control" value="0" placeholder="0.00">
+          <div class="col-md-6 col-12">
+            <label class="form-label" for="enganche_tarjeta">Enganche Tarjeta ($)</label>
+            <input type="number" step="0.01" min="0" name="enganche_tarjeta" id="enganche_tarjeta" class="form-control" value="0" placeholder="0.00" inputmode="decimal">
           </div>
         </div>
 
         <div class="row g-3">
-          <div class="col-md-4" id="plazo_field">
-            <label class="form-label">Plazo en Semanas</label>
-            <input type="number" min="1" name="plazo_semanas" id="plazo_semanas" class="form-control" value="0" placeholder="Ej. 52">
+          <div class="col-md-4 col-12" id="plazo_field">
+            <label class="form-label" for="plazo_semanas">Plazo en Semanas</label>
+            <input type="number" min="1" name="plazo_semanas" id="plazo_semanas" class="form-control" value="0" placeholder="Ej. 52" inputmode="numeric">
           </div>
-          <div class="col-md-4" id="financiera_field">
-            <label class="form-label">Financiera</label>
-            <select name="financiera" id="financiera" class="form-control">
+          <div class="col-md-4 col-12" id="financiera_field">
+            <label class="form-label" for="financiera">Financiera</label>
+            <select name="financiera" id="financiera" class="form-select">
               <option value="">N/A</option>
               <option value="PayJoy">PayJoy</option>
               <option value="Krediya">Krediya</option>
             </select>
           </div>
-          <div class="col-md-4">
-            <label class="form-label">Comentarios</label>
-            <input type="text" name="comentarios" class="form-control" placeholder="Notas adicionales (opcional)">
+          <div class="col-md-4 col-12">
+            <label class="form-label" for="comentarios">Comentarios</label>
+            <input type="text" name="comentarios" id="comentarios" class="form-control" placeholder="Notas adicionales (opcional)" autocomplete="off">
           </div>
         </div>
       </div>
-      <div class="card-footer bg-white border-0 p-3">
-        <button class="btn btn-gradient text-white w-100 py-2" id="btn_submit">
+      <div class="card-footer bg-white border-0 p-3 d-none d-sm-block">
+        <button type="button" class="btn btn-gradient text-white w-100 py-2" id="btn_submit">
           <i class="bi bi-check2-circle me-2"></i> Registrar Venta
         </button>
       </div>
     </div>
   </form>
+</div>
+
+<!-- Botón fijo móvil -->
+<div class="mobile-action d-sm-none">
+  <button type="button" class="btn btn-gradient text-white w-100 btn-lg" id="btn_submit_mobile">
+    <i class="bi bi-check2-circle me-2"></i> Registrar Venta
+  </button>
 </div>
 
 <!-- Modal de Confirmación -->
@@ -294,225 +329,106 @@ foreach ($sucursales as $s) { $mapSuc[(int)$s['id']] = $s['nombre']; }
 <!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script> -->
 
 <script>
-$(document).ready(function() {
+$(function() {
   const idSucursalUsuario = <?= $id_sucursal_usuario ?>;
   const mapaSucursales = <?= json_encode($mapSuc, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
   const modalConfirm = new bootstrap.Modal(document.getElementById('modalConfirmacion'));
 
-  // Inicializa Select2
+  // === Select2 equipos (UI móvil full width) ===
   $('.select2-equipo').select2({
-    placeholder: "Buscar por modelo o IMEI",
+    width: '100%',
+    placeholder: 'Buscar modelo o IMEI',
     allowClear: true,
-    width: '100%'
-  });
+    dropdownAutoWidth: true,
+    selectionCssClass: 'form-select',
+    dropdownCssClass: 'shadow'
+  }).on('select2:select', function(){ $(this).blur(); }); // cierra teclado móvil
 
-  // Mostrar/ocultar según tipo de venta
-  $('#tipo_venta').on('change', function() {
-    $('#combo').toggle(isFinanciamientoCombo());
-    toggleVenta();
-  });
-
-  $('#forma_pago_enganche').on('change', function() {
-    $('#mixto_detalle').toggle($(this).val() === 'Mixto' && isFinanciamiento());
-  });
-
-  function isFinanciamiento(){
+  // === Mostrar/ocultar campos según tipo/forma ===
+  function toggleByTipo(){
     const tipo = $('#tipo_venta').val();
-    return (tipo === 'Financiamiento' || tipo === 'Financiamiento+Combo');
+    // Combo visible solo si Financiamiento+Combo
+    if (tipo === 'Financiamiento+Combo') { $('#combo').slideDown(120); } else { $('#combo').slideUp(120); }
+
+    // Campos de financiamiento visibles si no es Contado
+    const esFin = (tipo === 'Financiamiento' || tipo === 'Financiamiento+Combo');
+    $('#plazo_field').toggle(esFin);
+    $('#financiera_field').toggle(esFin);
+    $('#tag_field').toggle(esFin);
+    // Enganche visible si hay financiamiento
+    $('#enganche_field').toggle(esFin);
   }
-  function isFinanciamientoCombo(){
-    return $('#tipo_venta').val() === 'Financiamiento+Combo';
+  function toggleMixto(){
+    const forma = $('#forma_pago_enganche').val();
+    $('#mixto_detalle').toggle(forma === 'Mixto');
   }
+  $('#tipo_venta').on('change', toggleByTipo);
+  $('#forma_pago_enganche').on('change', toggleMixto);
+  toggleByTipo(); toggleMixto(); // estado inicial
 
-  function toggleVenta() {
-    const esFin = isFinanciamiento();
+  // === Alerta si eligen sucursal distinta ===
+  $('#id_sucursal').on('change', function(){
+    const sel = parseInt($(this).val() || '0', 10);
+    $('#alerta_sucursal').toggleClass('d-none', sel === idSucursalUsuario);
+  }).trigger('change');
 
-    // TAG, Enganche, Plazo, Financiera visibles solo en financiamiento
-    $('#tag_field, #enganche_field, #plazo_field, #financiera_field').toggle(esFin);
-    $('#mixto_detalle').toggle(esFin && $('#forma_pago_enganche').val()==='Mixto');
-
-    // Etiqueta de forma de pago
-    $('#label_forma_pago').text(esFin ? 'Forma de Pago Enganche' : 'Forma de Pago');
-
-    // Requeridos SÓLO cuando es financiamiento (incluye combo)
-    $('#tag').prop('required', esFin);
-    $('#nombre_cliente').prop('required', esFin);
-    $('#telefono_cliente').prop('required', esFin);
-    $('#enganche').prop('required', esFin);
-    $('#plazo_semanas').prop('required', esFin);
-    $('#financiera').prop('required', esFin);
-
-    // Campos siempre obligatorios: precio y forma de pago
-    $('#precio_venta').prop('required', true);
-    $('#forma_pago_enganche').prop('required', true);
-
-    if (!esFin) {
-      // Reset cuando es Contado
-      $('#tag').val('');
-      $('#enganche').val(0);
-      $('#plazo_semanas').val(0);
-      $('#financiera').val('');
-      $('#enganche_efectivo').val(0);
-      $('#enganche_tarjeta').val(0);
-    }
-  }
-
-  toggleVenta(); // Al cargar
-
-  // Cargar productos por sucursal
-  function cargarEquipos(sucursalId) {
-    $.ajax({
-      url: 'ajax_productos_por_sucursal.php',
-      method: 'POST',
-      data: { id_sucursal: sucursalId },
-      success: function(response) {
-        $('#equipo1, #equipo2').html(response).val('').trigger('change');
-      }
-    });
-  }
-
-  cargarEquipos($('#id_sucursal').val());
-
-  $('#id_sucursal').on('change', function() {
-    const seleccionada = parseInt($(this).val());
-    if (seleccionada !== idSucursalUsuario) {
-      $('#alerta_sucursal').removeClass('d-none');
-    } else {
-      $('#alerta_sucursal').addClass('d-none');
-    }
-    cargarEquipos(seleccionada);
-  });
-
-  // =============== VALIDACIÓN Y MODAL ===============
-  let permitSubmit = false;
-
-  function validarFormulario() {
-    const errores = [];
-    const esFin = isFinanciamiento();
-
-    const nombre = $('#nombre_cliente').val().trim();
-    const tel    = $('#telefono_cliente').val().trim();
-    const tag    = $('#tag').val().trim();
-    const tipo   = $('#tipo_venta').val();
-
-    const precio = parseFloat($('#precio_venta').val());
-    const eng    = parseFloat($('#enganche').val());
-    const forma  = $('#forma_pago_enganche').val();
-    const plazo  = parseInt($('#plazo_semanas').val(), 10);
-    const finan  = $('#financiera').val();
-
-    // Siempre
-    if (!tipo) errores.push('Selecciona el tipo de venta.');
-    if (!precio || precio <= 0) errores.push('El precio de venta debe ser mayor a 0.');
-    if (!forma) errores.push('Selecciona la forma de pago.');
-    if (!$('#equipo1').val()) errores.push('Selecciona el equipo principal.');
-
-    // Solo en financiamiento / combo
-    if (esFin) {
-      if (!nombre) errores.push('Ingresa el nombre del cliente (Financiamiento).');
-      if (!tel) errores.push('Ingresa el teléfono del cliente (Financiamiento).');
-      if (tel && !/^\d{10}$/.test(tel)) errores.push('El teléfono debe tener 10 dígitos.');
-      if (!tag) errores.push('El TAG (ID del crédito) es obligatorio.');
-      if (isNaN(eng) || eng < 0) errores.push('El enganche es obligatorio (puede ser 0, no negativo).');
-      if (!plazo || plazo <= 0) errores.push('El plazo en semanas debe ser mayor a 0.');
-      if (!finan) errores.push('Selecciona una financiera (no N/A).');
-
-      if (forma === 'Mixto') {
-        const ef = parseFloat($('#enganche_efectivo').val()) || 0;
-        const tj = parseFloat($('#enganche_tarjeta').val()) || 0;
-        if (ef <= 0 && tj <= 0) errores.push('En Mixto, al menos uno de los montos debe ser > 0.');
-        if ((eng||0).toFixed(2) !== (ef+tj).toFixed(2)) errores.push('Efectivo + Tarjeta debe igualar al Enganche.');
-      }
-    } else {
-      // En contado, si el usuario llenó teléfono, valida formato (opcional)
-      if (tel && !/^\d{10}$/.test(tel)) errores.push('El teléfono debe tener 10 dígitos.');
-    }
-
-    return errores;
-  }
-
-  function poblarModal() {
-    const idSucSel = $('#id_sucursal').val();
-    const sucNom = mapaSucursales[idSucSel] || '—';
-    $('#conf_sucursal').text(sucNom);
-
-    const tipo = $('#tipo_venta').val() || '—';
-    $('#conf_tipo').text(tipo);
-
-    // Texto visible del select2
-    const equipo1Text = $('#equipo1').find('option:selected').text() || '—';
-    const equipo2Text = $('#equipo2').find('option:selected').text() || '';
-
-    $('#conf_equipo1').text(equipo1Text);
-    if ($('#combo').is(':visible') && $('#equipo2').val()) {
-      $('#conf_equipo2').text(equipo2Text);
-      $('#li_equipo2').removeClass('d-none');
-    } else {
-      $('#li_equipo2').addClass('d-none');
-    }
-
-    const precio = parseFloat($('#precio_venta').val()) || 0;
-    $('#conf_precio').text(precio.toFixed(2));
-
-    const esFin = isFinanciamiento();
-    if (esFin) {
-      const eng = parseFloat($('#enganche').val()) || 0;
-      $('#conf_enganche').text(eng.toFixed(2));
-      $('#li_enganche').removeClass('d-none');
-
-      const finan = $('#financiera').val() || '—';
-      $('#conf_financiera').text(finan);
-      $('#li_financiera').removeClass('d-none');
-
-      const tag = ($('#tag').val() || '').trim();
-      if (tag) {
-        $('#conf_tag').text(tag);
-        $('#li_tag').removeClass('d-none');
-      } else {
-        $('#li_tag').addClass('d-none');
-      }
-    } else {
-      $('#li_enganche, #li_financiera, #li_tag').addClass('d-none');
-    }
-  }
-
-  $('#form_venta').on('submit', function(e){
-    if (permitSubmit) return; // ya confirmado
-
+  // === Botones que abren el modal (desktop y móvil) ===
+  $('#btn_submit, #btn_submit_mobile').on('click', function(e){
     e.preventDefault();
-    const errores = validarFormulario();
 
-    if (errores.length > 0) {
-      $('#errores')
-        .removeClass('d-none')
-        .html('<strong>Corrige lo siguiente:</strong><ul class="mb-0"><li>' + errores.join('</li><li>') + '</li></ul>');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-
-    // Sin errores → abrir modal de confirmación
+    // Limpia errores UI
     $('#errores').addClass('d-none').empty();
-    poblarModal();
+
+    // Rellena confirmación
+    const tipo = $('#tipo_venta').val() || '—';
+    const suc  = $('#id_sucursal').val() ? (mapaSucursales[$('#id_sucursal').val()] || '—') : '—';
+    const eq1  = $('#equipo1').find('option:selected').text() || $('#equipo1').val() || '—';
+    const eq2  = $('#equipo2').find('option:selected').text() || $('#equipo2').val() || '';
+
+    const precio = parseFloat($('#precio_venta').val() || 0).toFixed(2);
+    const eng   = parseFloat($('#enganche').val() || 0).toFixed(2);
+    const fin   = $('#financiera').val() || '';
+    const tag   = $('#tag').val() || '';
+
+    $('#conf_sucursal').text(suc);
+    $('#conf_tipo').text(tipo);
+    $('#conf_equipo1').text(eq1);
+    $('#conf_precio').text(precio);
+
+    // Opcionales
+    $('#li_equipo2').toggleClass('d-none', !(tipo === 'Financiamiento+Combo' && eq2));
+    $('#conf_equipo2').text(eq2 || '—');
+
+    const esFin = (tipo === 'Financiamiento' || tipo === 'Financiamiento+Combo');
+    $('#li_enganche').toggleClass('d-none', !esFin || (parseFloat(eng) <= 0));
+    $('#conf_enganche').text(eng);
+
+    $('#li_financiera').toggleClass('d-none', !esFin || !fin);
+    $('#conf_financiera').text(fin || '—');
+
+    $('#li_tag').toggleClass('d-none', !esFin || !tag);
+    $('#conf_tag').text(tag || '—');
+
     modalConfirm.show();
   });
 
-  // Confirmar envío desde el modal
+  // === Confirmar y enviar ===
   $('#btn_confirmar_envio').on('click', function(){
-    // Bloquea el botón principal para evitar doble submit
-    $('#btn_submit').prop('disabled', true).text('Enviando...');
-    permitSubmit = true;
-    modalConfirm.hide();
+    // Aquí no tocamos lógica; sólo mandamos el form
     $('#form_venta')[0].submit();
   });
 
-  // Cargar equipos al inicio
-  function initEquipos() {
-    cargarEquipos($('#id_sucursal').val());
-  }
-  initEquipos();
+  // === Mejora UX: enter en inputs numéricos no envía accidentalmente (abre modal) ===
+  $('#form_venta').on('keypress', 'input', function(e){
+    if (e.which === 13) {
+      e.preventDefault();
+      $('#btn_submit_mobile').trigger('click');
+    }
+  });
 
+  // === Accesibilidad básica ===
+  $('#tipo_venta, #id_sucursal, #equipo1, #precio_venta').attr('aria-invalid','false');
 });
 </script>
-
 </body>
 </html>

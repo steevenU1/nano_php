@@ -254,9 +254,6 @@ $stmt->close();
 
 /* ==========================================================
    🔹 RANKING SUCURSALES (Master Admin) — SIN cuota/cumplimiento
-   ✅ Conteo correcto:
-      - Unidades: CASE con NULL → 0, Fin=1, Contado=1, F+Combo=2
-      - Ventas $: SUM(v.precio_venta)
 ========================================================== */
 $sqlSucursalesMA = "
   SELECT
@@ -305,12 +302,53 @@ require_once __DIR__ . '/navbar.php';
 <head>
   <meta charset="UTF-8">
   <title>Nano — Productividad del Día (<?= h($fecha) ?>)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- móvil -->
   <link rel="icon" type="image/x-icon" href="./img/favicon.ico">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    /* Toques de UI */
+    .navbar { box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+    .progress{height:20px}
+    .progress-bar{font-size:.75rem}
+
+    /* Sticky filtros + ajustes móviles */
+    @media (max-width: 576px){
+      .container { padding-left: .6rem; padding-right: .6rem; }
+      h2 { font-size: 1.1rem; margin-bottom: .25rem; }
+      .card .card-header { padding: .5rem .75rem; font-size: .9rem; }
+      .card .card-body { padding: .75rem; }
+      .table th, .table td { padding: .45rem .5rem; font-size: .86rem; }
+      .sticky-mobile-bar{
+        position: sticky; top: 0; z-index: 1030; background: #fff;
+        padding:.6rem .6rem; margin-bottom:.75rem;
+        border-bottom:1px solid rgba(0,0,0,.06);
+        box-shadow: 0 6px 18px rgba(0,0,0,.05);
+        border-radius: .75rem;
+      }
+      .mini-kpis .card h3 { font-size: 1.05rem; }
+    }
+  </style>
 </head>
 <body class="bg-light">
-<div class="container mt-4">
-  <div class="d-flex justify-content-between align-items-center">
+<div class="container mt-3">
+
+  <!-- Barra pegajosa de filtros para móvil -->
+  <div class="sticky-mobile-bar d-md-none">
+    <form method="GET" class="row g-2 align-items-center">
+      <div class="col-7">
+        <input type="date" name="fecha" class="form-control form-control-sm" value="<?= h($fecha) ?>" max="<?= h($hoyLocal) ?>">
+      </div>
+      <div class="col-3">
+        <a class="btn btn-outline-secondary btn-sm w-100" href="productividad_dia.php?fecha=<?= h($ayerLocal) ?>">Ayer</a>
+      </div>
+      <div class="col-2">
+        <button class="btn btn-primary btn-sm w-100">Ver</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Encabezado desktop -->
+  <div class="d-none d-md-flex justify-content-between align-items-center">
     <h2>📅 Nano — Productividad del Día — <?= date('d/m/Y', strtotime($fecha)) ?></h2>
     <form method="GET" class="d-flex gap-2">
       <input type="date" name="fecha" class="form-control" value="<?= h($fecha) ?>" max="<?= h($hoyLocal) ?>">
@@ -320,27 +358,27 @@ require_once __DIR__ . '/navbar.php';
   </div>
 
   <!-- Tarjetas globales (solo PROPIAS) -->
-  <div class="row mt-3 g-3">
-    <div class="col-md-3">
-      <div class="card shadow text-center">
+  <div class="row mt-3 g-3 mini-kpis">
+    <div class="col-6 col-md-3">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-dark text-white">Unidades</div>
         <div class="card-body"><h3><?= (int)$unidadesValidas ?></h3></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="card shadow text-center">
+    <div class="col-6 col-md-3">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-dark text-white">Ventas $</div>
         <div class="card-body"><h3>$<?= number_format($ventasValidas,2) ?></h3></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="card shadow text-center">
+    <div class="col-6 col-md-3">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-dark text-white">Tickets</div>
         <div class="card-body"><h3><?= (int)$tickets ?></h3></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="card shadow text-center">
+    <div class="col-6 col-md-3">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-dark text-white">Ticket Prom.</div>
         <div class="card-body"><h3>$<?= number_format($ticketProm,2) ?></h3></div>
       </div>
@@ -350,23 +388,23 @@ require_once __DIR__ . '/navbar.php';
   <!-- Global en UNIDADES -->
   <div class="row mt-3 g-3">
     <div class="col-md-4">
-      <div class="card shadow text-center">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-primary text-white">Cuota diaria global (u.) — Propias</div>
-        <div class="card-body"><h4><?= number_format($cuotaDiariaGlobalU,2) ?></h4></div>
+        <div class="card-body"><h4 class="mb-0"><?= number_format($cuotaDiariaGlobalU,2) ?></h4></div>
       </div>
     </div>
     <div class="col-md-8">
-      <div class="card shadow">
+      <div class="card shadow h-100">
         <div class="card-body">
           <?php
             $cumplGlobalU = $cuotaDiariaGlobalU > 0 ? ($unidadesValidas / $cuotaDiariaGlobalU) * 100 : 0;
             $clsU = ($cumplGlobalU>=100?'bg-success':($cumplGlobalU>=60?'bg-warning':'bg-danger'));
           ?>
-          <div class="d-flex justify-content-between">
+          <div class="d-flex justify-content-between mb-1">
             <div><strong>Cumplimiento global del día (u.)</strong></div>
             <div><strong><?= number_format(min(100,$cumplGlobalU),1) ?>%</strong></div>
           </div>
-          <div class="progress" style="height:22px">
+          <div class="progress">
             <div class="progress-bar <?= $clsU ?>" style="width:<?= min(100,$cumplGlobalU) ?>%"></div>
           </div>
         </div>
@@ -377,20 +415,20 @@ require_once __DIR__ . '/navbar.php';
   <!-- Global en MONTO -->
   <div class="row mt-3 g-3">
     <div class="col-md-4">
-      <div class="card shadow text-center">
+      <div class="card shadow text-center h-100">
         <div class="card-header bg-primary text-white">Cuota diaria global ($) — Propias</div>
-        <div class="card-body"><h4>$<?= number_format($cuotaDiariaGlobalM,2) ?></h4></div>
+        <div class="card-body"><h4 class="mb-0">$<?= number_format($cuotaDiariaGlobalM,2) ?></h4></div>
       </div>
     </div>
     <div class="col-md-8">
-      <div class="card shadow">
+      <div class="card shadow h-100">
         <div class="card-body">
           <?php $clsM = ($cumplGlobalM>=100?'bg-success':($cumplGlobalM>=60?'bg-warning':'bg-danger')); ?>
-          <div class="d-flex justify-content-between">
+          <div class="d-flex justify-content-between mb-1">
             <div><strong>Cumplimiento global del día ($)</strong></div>
             <div><strong><?= number_format(min(100,$cumplGlobalM),1) ?>%</strong></div>
           </div>
-          <div class="progress" style="height:22px">
+          <div class="progress">
             <div class="progress-bar <?= $clsM ?>" style="width:<?= min(100,$cumplGlobalM) ?>%"></div>
           </div>
         </div>
@@ -411,17 +449,17 @@ require_once __DIR__ . '/navbar.php';
       <div class="card shadow mt-3">
         <div class="card-header bg-dark text-white">Ranking de Ejecutivos (<?= date('d/m/Y', strtotime($fecha)) ?>)</div>
         <div class="card-body table-responsive">
-          <table class="table table-striped table-bordered align-middle">
+          <table class="table table-striped table-bordered align-middle mb-0">
             <thead class="table-dark">
               <tr>
                 <th>Ejecutivo</th>
-                <th>Sucursal</th>
+                <th class="d-none d-md-table-cell">Sucursal</th>
                 <th>Unidades</th>
-                <th>Ventas $</th>
-                <th>Tickets</th>
-                <th>Cuota diaria (u.)</th>
+                <th class="d-none d-md-table-cell">Ventas $</th>
+                <th class="d-none d-md-table-cell">Tickets</th>
+                <th class="d-none d-md-table-cell">Cuota diaria (u.)</th>
                 <th>% Cumplimiento</th>
-                <th>Progreso</th>
+                <th class="d-none d-md-table-cell">Progreso</th>
               </tr>
             </thead>
             <tbody>
@@ -433,16 +471,14 @@ require_once __DIR__ . '/navbar.php';
               ?>
               <tr class="<?= $fila ?>">
                 <td><?= h($e['nombre']) ?></td>
-                <td><?= h($e['sucursal']) ?></td>
+                <td class="d-none d-md-table-cell"><?= h($e['sucursal']) ?></td>
                 <td><?= (int)$e['unidades_validas'] ?></td>
-                <td>$<?= number_format($e['ventas_validas'],2) ?></td>
-                <td><?= (int)$e['tickets'] ?></td>
-                <td><?= number_format($cuotaDiaU,2) ?></td>
+                <td class="d-none d-md-table-cell">$<?= number_format($e['ventas_validas'],2) ?></td>
+                <td class="d-none d-md-table-cell"><?= (int)$e['tickets'] ?></td>
+                <td class="d-none d-md-table-cell"><?= number_format($cuotaDiaU,2) ?></td>
                 <td><?= number_format($cumpl,1) ?>%</td>
-                <td>
-                  <div class="progress" style="height:20px">
-                    <div class="progress-bar <?= $cls ?>" style="width:<?= min(100,$cumpl) ?>%"></div>
-                  </div>
+                <td class="d-none d-md-table-cell">
+                  <div class="progress"><div class="progress-bar <?= $cls ?>" style="width:<?= min(100,$cumpl) ?>%"></div></div>
                 </td>
               </tr>
               <?php endforeach;?>
@@ -457,16 +493,16 @@ require_once __DIR__ . '/navbar.php';
       <div class="card shadow mt-3">
         <div class="card-header bg-primary text-white">Ranking de Sucursales (Propias) — <?= date('d/m/Y', strtotime($fecha)) ?></div>
         <div class="card-body table-responsive">
-          <table class="table table-striped table-bordered align-middle">
+          <table class="table table-striped table-bordered align-middle mb-0">
             <thead class="table-dark">
               <tr>
                 <th>Sucursal</th>
-                <th>Subtipo</th>
-                <th>Unidades</th>
+                <th class="d-none d-md-table-cell">Subtipo</th>
+                <th class="d-none d-md-table-cell">Unidades</th>
                 <th>Ventas $</th>
                 <th>Cuota diaria ($)</th>
-                <th>% Cumplimiento (monto)</th>
-                <th>Progreso</th>
+                <th>% Cumplimiento</th>
+                <th class="d-none d-md-table-cell">Progreso</th>
               </tr>
             </thead>
             <tbody>
@@ -477,15 +513,13 @@ require_once __DIR__ . '/navbar.php';
               ?>
               <tr class="<?= $fila ?>">
                 <td><?= h($s['sucursal']) ?></td>
-                <td><?= h($s['subtipo']) ?></td>
-                <td><?= (int)$s['unidades_validas'] ?></td>
+                <td class="d-none d-md-table-cell"><?= h($s['subtipo']) ?></td>
+                <td class="d-none d-md-table-cell"><?= (int)$s['unidades_validas'] ?></td>
                 <td>$<?= number_format($s['ventas_validas'],2) ?></td>
                 <td>$<?= number_format($s['cuota_diaria_monto'],2) ?></td>
                 <td><?= number_format($cumpl,1) ?>%</td>
-                <td>
-                  <div class="progress" style="height:20px">
-                    <div class="progress-bar <?= $cls ?>" style="width:<?= min(100,$cumpl) ?>%"></div>
-                  </div>
+                <td class="d-none d-md-table-cell">
+                  <div class="progress"><div class="progress-bar <?= $cls ?>" style="width:<?= min(100,$cumpl) ?>%"></div></div>
                 </td>
               </tr>
               <?php endforeach;?>
@@ -500,11 +534,11 @@ require_once __DIR__ . '/navbar.php';
       <div class="card shadow mt-3">
         <div class="card-header bg-secondary text-white">Ranking de Sucursales (Master Admin) — <?= date('d/m/Y', strtotime($fecha)) ?></div>
         <div class="card-body table-responsive">
-          <table class="table table-striped table-bordered align-middle">
+          <table class="table table-striped table-bordered align-middle mb-0">
             <thead class="table-dark">
               <tr>
                 <th>Sucursal</th>
-                <th>Subtipo</th>
+                <th class="d-none d-md-table-cell">Subtipo</th>
                 <th>Unidades</th>
                 <th>Ventas $</th>
               </tr>
@@ -513,7 +547,7 @@ require_once __DIR__ . '/navbar.php';
               <?php foreach ($sucursalesMA as $s): ?>
               <tr>
                 <td><?= h($s['sucursal']) ?></td>
-                <td><?= h($s['subtipo']) ?></td>
+                <td class="d-none d-md-table-cell"><?= h($s['subtipo']) ?></td>
                 <td><?= (int)$s['unidades_validas'] ?></td>
                 <td>$<?= number_format($s['ventas_validas'],2) ?></td>
               </tr>
@@ -521,7 +555,8 @@ require_once __DIR__ . '/navbar.php';
             </tbody>
             <tfoot>
               <tr class="table-dark">
-                <th colspan="2" class="text-end">Totales:</th>
+                <th class="text-end d-none d-md-table-cell" colspan="2">Totales:</th>
+                <th class="d-md-none">Totales</th>
                 <th><?= (int)$totMAUnidades ?></th>
                 <th>$<?= number_format($totMAVentas,2) ?></th>
               </tr>
@@ -534,6 +569,7 @@ require_once __DIR__ . '/navbar.php';
   </div><!-- /tab-content -->
 </div>
 
+<!-- Bundle opcional si usas tabs de Bootstrap -->
 <!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 </body>
 </html>
