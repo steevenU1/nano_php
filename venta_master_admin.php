@@ -32,6 +32,7 @@ $nowLocal = date('Y-m-d\TH:i');
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
   <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
   <style>
     body{background:#f6f7fb;}
@@ -48,6 +49,7 @@ $nowLocal = date('Y-m-d\TH:i');
     .select2-container--default .select2-selection__rendered{line-height:38px;color:#111827;padding-left:.5rem}
     .select2-container--default .select2-selection__arrow{height:38px}
     .header-chip{gap:.5rem}
+    .d-none-imp{display:none!important;}
   </style>
 </head>
 <body>
@@ -130,9 +132,9 @@ $nowLocal = date('Y-m-d\TH:i');
       <div class="card-body">
         <div class="row g-3">
           <div class="col-md-6"><input type="text" name="nombre_cliente" id="nombre_cliente" class="form-control" placeholder="Nombre del cliente"></div>
-          <div class="col-md-6"><input type="text" name="telefono_cliente" id="telefono_cliente" class="form-control" placeholder="Teléfono (10 dígitos)"></div>
         </div>
         <div class="row g-3 mt-1">
+          <div class="col-md-6"><input type="text" name="telefono_cliente" id="telefono_cliente" class="form-control" placeholder="Teléfono (10 dígitos)"></div>
           <div class="col-md-6" id="tag_field"><input type="text" name="tag" id="tag" class="form-control" placeholder="TAG (ID crédito)"></div>
         </div>
       </div>
@@ -189,11 +191,34 @@ $nowLocal = date('Y-m-d\TH:i');
 
 <script>
 $(function(){
+  // Helpers
   function selectedSubtipo(){ const $o=$('#id_sucursal').find('option:selected'); return $o.data('subtipo')||''; }
   function syncSubtipoHidden(){ $('#origen_subtipo').val(selectedSubtipo()); }
 
-  $('#id_sucursal').on('change', syncSubtipoHidden);
+  function toggleEquipos(){
+    const origen = $('#origen_ma').val();          // nano | propio
+    const show = (origen === 'nano');
+    $('#card_equipos').toggleClass('d-none-imp', !show);
+    // deshabilitar inputs al ocultar para que no se envíen
+    $('#equipo1, #equipo2').prop('disabled', !show);
+  }
 
+  function toggleCombo(){
+    const tipo = $('#tipo_venta').val();
+    const showCombo = (tipo === 'Financiamiento+Combo');
+    $('#combo_wrap').toggleClass('d-none-imp', !showCombo);
+    $('#equipo2').prop('disabled', !showCombo || $('#origen_ma').val()!=='nano');
+  }
+
+  // Eventos
+  $('#id_sucursal').on('change', syncSubtipoHidden);
+  $('#origen_ma').on('change', function(){ toggleEquipos(); toggleCombo(); });
+  $('#tipo_venta').on('change', toggleCombo);
+
+  // Select2 (si luego llenas via AJAX)
+  $('.select2-equipo').select2({placeholder:'Selecciona un equipo', width:'100%'});
+
+  // Modal
   $('#btn_preconfirm').on('click', function(){
     syncSubtipoHidden();
     $('#sum_sucursal').text($('#id_sucursal option:selected').text());
@@ -203,6 +228,10 @@ $(function(){
     new bootstrap.Modal('#confirmModal').show();
   });
   $('#btn_confirmar_modal').on('click', ()=>$('#btn_submit_real').trigger('click'));
+
+  // estado inicial
+  toggleEquipos();
+  toggleCombo();
 });
 </script>
 </body>

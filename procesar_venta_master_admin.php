@@ -184,37 +184,29 @@ if (!$stmt) {
     die("Error en prepare(): " . $conn->error);
 }
 
-/* Tipos por orden (18):
-   1 s  tag
-   2 s  nombre_cliente
-   3 s  telefono_cliente
-   4 s  tipo_venta
-   5 d  precio_venta
-   6 d  enganche
-   7 s  forma_pago_enganche
-   8 d  enganche_efectivo
-   9 d  enganche_tarjeta
-   10 i plazo_semanas
-   11 s financiera
-   12 i id_sucursal
-   13 i id_usuario
-   14 s origen_ma
-   15 s origen_subtipo
-   16 s comentarios
-   17 s fecha_venta
-   18 d comision_master_admin
+/*
+Tipos (18):
+1 s tag
+2 s nombre_cliente
+3 s telefono_cliente
+4 s tipo_venta
+5 d precio_venta
+6 d enganche
+7 s forma_pago_enganche
+8 d enganche_efectivo
+9 d enganche_tarjeta
+10 i plazo_semanas
+11 s financiera
+12 i id_sucursal
+13 i id_usuario
+14 s origen_ma
+15 s origen_subtipo
+16 s comentarios
+17 s fecha_venta
+18 d comision_master_admin
 */
 $stmt->bind_param(
-    "ssssddsddis iissss d", // ← visual
-    $tag, $nombreCliente, $telefonoCliente,
-    $tipoVenta, $precioVenta, $enganche, $formaPagoEng,
-    $engancheEfectivo, $engancheTarjeta, $plazoSemanas, $financiera,
-    $idSucursal, $idUsuario, $origen_ma, $origen_subtipo,
-    $comentarios, $fechaVenta, $comisionMA
-);
-// La cadena de tipos sin espacios:
-$stmt->bind_param(
-    "ssssddsddisiisssssd",
+    "ssssddsddisiissssd",
     $tag, $nombreCliente, $telefonoCliente,
     $tipoVenta, $precioVenta, $enganche, $formaPagoEng,
     $engancheEfectivo, $engancheTarjeta, $plazoSemanas, $financiera,
@@ -222,9 +214,7 @@ $stmt->bind_param(
     $comentarios, $fechaVenta, $comisionMA
 );
 
-if (!$stmt->execute()) {
-    die("Error al guardar la venta: " . $stmt->error);
-}
+$stmt->execute();
 
 $idVenta = $stmt->insert_id;
 $stmt->close();
