@@ -408,8 +408,8 @@ $nombreCorto = firstName($nombreUsuario);
           </li>
         <?php endif; ?>
 
-        <!-- TRASPASOS (no Logística) -->
-        <?php if (in_array($rolUsuario, ['Gerente', 'Admin', 'Super'])): ?>
+        <!-- TRASPASOS (habilitado para Ejecutivo, Gerente, Admin, Super) -->
+        <?php if (in_array($rolUsuario, ['Ejecutivo', 'Gerente', 'Admin', 'Super'])): ?>
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle<?= parentActive($grpTraspasos) ?>" href="#" role="button" data-bs-toggle="dropdown">
               <i class="bi bi-arrow-left-right me-1"></i>Traspasos
@@ -450,9 +450,9 @@ $nombreCorto = firstName($nombreUsuario);
                 </a>
               </li>
 
-              <?php if ($rolUsuario === 'Gerente'): ?>
-                <li><hr class="dropdown-divider"></li>
-                <li class="dropdown-header">Equipos</li>
+              <li><hr class="dropdown-divider"></li>
+              <li class="dropdown-header">Equipos</li>
+              <?php if (in_array($rolUsuario, ['Gerente', 'Ejecutivo'])): ?>
                 <li>
                   <a class="dropdown-item<?= isActive(['traspaso_nuevo.php']) ?>" href="traspaso_nuevo.php">
                     <i class="bi bi-shuffle me-2"></i>Generar traspaso entre sucursales
