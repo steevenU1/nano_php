@@ -247,16 +247,83 @@ $stmt2->close();
 <head>
     <meta charset="UTF-8">
     <title>Historial Ventas — <?= esc($labelTipo) ?></title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .badge-origen { font-size:.75rem; }
         .table thead th { white-space:nowrap; }
         .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
         .nav-pills .nav-link.active{ font-weight:600; }
+        .shadow-sm-inset {
+            box-shadow: inset 0 1px 0 rgba(0,0,0,.04);
+        }
+        /* Sombra de scroll para tabla horizontal */
+        .table-wrap {
+            position: relative;
+        }
+        .table-wrap::after {
+            content:'';
+            position:absolute; top:0; right:0; width:16px; height:100%;
+            pointer-events:none;
+            background: linear-gradient(to left, rgba(0,0,0,.06), rgba(0,0,0,0));
+            border-radius: 0 .5rem .5rem 0;
+        }
+
+        /* ====== MODO MÓVIL: tabla → cards ====== */
+        @media (max-width: 576px) {
+            .kpis .card { border-radius:1rem; }
+            .filters-sticky {
+                position: sticky; top: 0; z-index: 5;
+                background: #f8f9fa; padding-top:.5rem; margin-top:-.5rem;
+            }
+            .table-responsive { overflow: visible; }
+            table.table-mobile {
+                border-collapse: separate;
+                border-spacing: 0 12px;
+            }
+            .table-mobile thead { display: none; }
+            .table-mobile tbody tr {
+                display: block;
+                background: #fff;
+                border-radius: .75rem;
+                border: 1px solid rgba(0,0,0,.06);
+                overflow: hidden;
+            }
+            .table-mobile tbody tr td,
+            .table-mobile tfoot tr td,
+            .table-mobile tfoot tr th {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 12px;
+                padding: .6rem .9rem;
+                border: 0 !important;
+                border-bottom: 1px dashed rgba(0,0,0,.08) !important;
+            }
+            .table-mobile tbody tr td:last-child { border-bottom: 0 !important; }
+            .table-mobile td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                color: #6c757d;
+            }
+            .td-actions { justify-content: flex-end; }
+            .td-wide { white-space: normal !important; word-break: break-word; }
+            /* Ocultar columnas muy secundarias en móvil */
+            .hide-xs { display: none !important; }
+            /* Totales de abajo: compactos */
+            .tfoot-desktop { display: none; }
+            .totales-mini {
+                margin-top: .75rem;
+                font-size: .95rem;
+            }
+        }
+        @media (min-width: 577px) {
+            .totales-mini { display:none; }
+        }
     </style>
 </head>
 <body class="bg-light">
-<div class="container-fluid px-3 px-md-4 my-4">
+<div class="container-fluid px-3 px-md-4 my-3 my-md-4">
 
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
         <h3 class="m-0">Historial de Ventas — <span class="text-primary"><?= esc($labelTipo) ?></span></h3>
@@ -281,9 +348,9 @@ $stmt2->close();
     </ul>
 
     <!-- Barra de semana -->
-    <div class="card p-3 mb-3">
+    <div class="card p-3 mb-3 shadow-sm-inset">
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <div class="d-flex align-items-center gap-2">
+            <div class="btn-group">
                 <?php
                 $qsBase = function ($nw) use ($id_sucursal, $busca_imei, $tipo) {
                     $q = http_build_query(['tipo'=>$tipo,'w'=>$nw,'sucursal'=>$id_sucursal,'imei'=>$busca_imei]);
@@ -293,9 +360,9 @@ $stmt2->close();
                 <a class="btn btn-outline-primary btn-sm" href="<?= $qsBase($w - 1) ?>">⟵ Semana anterior</a>
                 <a class="btn btn-outline-primary btn-sm" href="<?= $qsBase($w + 1) ?>">Semana siguiente ⟶</a>
             </div>
-            <div><strong>Semana:</strong> <?= esc($labelSemana) ?> (Mar → Lun)</div>
-            <div class="d-flex gap-2">
-                <a class="btn btn-outline-success btn-sm"
+            <div class="small"><strong>Semana:</strong> <?= esc($labelSemana) ?> <span class="text-muted">(Mar → Lun)</span></div>
+            <div class="d-flex gap-2 w-100 w-sm-auto">
+                <a class="btn btn-success btn-sm flex-fill flex-sm-none"
                    href="?<?= http_build_query(['tipo'=>$tipo,'w'=>$w,'sucursal'=>$id_sucursal,'imei'=>$busca_imei,'export'=>1]) ?>">
                     Exportar Excel (<?= esc($labelTipo) ?>)
                 </a>
@@ -304,15 +371,15 @@ $stmt2->close();
     </div>
 
     <!-- KPIs -->
-    <div class="row g-3 mb-3">
-        <div class="col-md-6 <?= $mostrarComision ? 'col-lg-4' : 'col-lg-6' ?>">
+    <div class="row g-3 mb-3 kpis">
+        <div class="col-12 col-sm-6 <?= $mostrarComision ? 'col-lg-4' : 'col-lg-6' ?>">
             <div class="card p-3">
                 <div class="text-muted">Unidades (semana)</div>
                 <div class="fs-3"><?= (int)$unidades_semana ?></div>
                 <small class="text-muted"><?= esc($labelTipo) ?></small>
             </div>
         </div>
-        <div class="col-md-6 <?= $mostrarComision ? 'col-lg-4' : 'col-lg-6' ?>">
+        <div class="col-12 col-sm-6 <?= $mostrarComision ? 'col-lg-4' : 'col-lg-6' ?>">
             <div class="card p-3">
                 <div class="text-muted">Monto vendido ($)</div>
                 <div class="fs-3"><?= n2($total_monto) ?></div>
@@ -320,7 +387,7 @@ $stmt2->close();
             </div>
         </div>
         <?php if ($mostrarComision): ?>
-        <div class="col-md-12 col-lg-4">
+        <div class="col-12 col-lg-4">
             <div class="card p-3">
                 <div class="text-muted">Comisión (MA)</div>
                 <div class="fs-3"><?= n2($total_com_ma) ?></div>
@@ -330,11 +397,11 @@ $stmt2->close();
     </div>
 
     <!-- Filtros -->
-    <form class="card p-3 mb-3" method="GET">
+    <form class="card p-3 mb-3 filters-sticky" method="GET">
         <input type="hidden" name="tipo" value="<?= esc($tipo) ?>">
         <input type="hidden" name="w" value="<?= (int)$w ?>">
         <div class="row g-3 align-items-end">
-            <div class="col-md-4">
+            <div class="col-12 col-md-4">
                 <label class="form-label">Sucursal (<?= esc($labelTipo) ?>)</label>
                 <select name="sucursal" class="form-select">
                     <option value="0">Todas</option>
@@ -345,14 +412,14 @@ $stmt2->close();
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="col-md-4">
+            <div class="col-12 col-md-4">
                 <label class="form-label">Buscar por IMEI</label>
                 <input type="text" name="imei" value="<?= esc($busca_imei) ?>" class="form-control" placeholder="IMEI contiene...">
             </div>
-            <div class="col-md-2 d-grid">
+            <div class="col-6 col-md-2 d-grid">
                 <button class="btn btn-primary">Aplicar</button>
             </div>
-            <div class="col-md-2 d-grid">
+            <div class="col-6 col-md-2 d-grid">
                 <a class="btn btn-outline-secondary" href="?<?= http_build_query(['tipo'=>$tipo,'w'=>0]) ?>">Limpiar</a>
             </div>
         </div>
@@ -361,7 +428,7 @@ $stmt2->close();
     <!-- Totales por sucursal -->
     <div class="card p-3 mb-3">
         <h6 class="text-muted mb-2">Totales por tienda <?= esc($labelTipo) ?> (Semana <?= esc($labelSemana) ?>)</h6>
-        <div class="table-responsive">
+        <div class="table-responsive table-wrap">
             <table class="table table-sm table-hover align-middle mb-0">
                 <thead class="table-light">
                     <tr>
@@ -401,10 +468,10 @@ $stmt2->close();
         </div>
     </div>
 
-    <!-- Tabla de ventas -->
+    <!-- Tabla / Cards de ventas -->
     <div class="card p-3">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover align-middle">
+        <div class="table-responsive table-wrap">
+            <table class="table table-striped table-hover align-middle table-mobile">
                 <thead class="table-light">
                     <tr>
                         <th>ID</th>
@@ -436,21 +503,21 @@ $stmt2->close();
                         $fechaSolo = date('d/m/Y', strtotime($v['fecha_venta']));
                     ?>
                         <tr>
-                            <td><?= (int)$v['id'] ?></td>
-                            <td><?= esc($fechaSolo) ?></td>
-                            <td><?= esc($v['sucursal']) ?></td>
-                            <td><?= esc($v['vendedor']) ?></td>
-                            <td><?= esc($v['tipo_venta']) ?></td>
-                            <td><?= $origenBadge ?></td>
-                            <td class="text-mono"><?= esc($imeis) ?></td>
-                            <td class="text-end"><?= n2($v['precio_venta']) ?></td>
-                            <td class="text-end"><?= n2($v['enganche']) ?></td>
+                            <td data-label="ID"><?= (int)$v['id'] ?></td>
+                            <td data-label="Fecha"><?= esc($fechaSolo) ?></td>
+                            <td data-label="Sucursal"><?= esc($v['sucursal']) ?></td>
+                            <td data-label="Capturó" class="hide-xs"><?= esc($v['vendedor']) ?></td>
+                            <td data-label="Tipo"><?= esc($v['tipo_venta']) ?></td>
+                            <td data-label="Origen"><?= $origenBadge ?></td>
+                            <td data-label="IMEI(s)" class="text-mono td-wide"><?= esc($imeis) ?></td>
+                            <td data-label="Precio ($)" class="text-end"><?= n2($v['precio_venta']) ?></td>
+                            <td data-label="Enganche ($)" class="text-end hide-xs"><?= n2($v['enganche']) ?></td>
                             <?php if ($mostrarComision): ?>
-                            <td class="text-end"><strong><?= n2($v['comision_master_admin']) ?></strong></td>
+                            <td data-label="Comisión ($)" class="text-end"><strong><?= n2($v['comision_master_admin']) ?></strong></td>
                             <?php endif; ?>
-                            <td><?= esc($v['comentarios']) ?></td>
+                            <td data-label="Comentarios" class="td-wide hide-xs"><?= esc($v['comentarios']) ?></td>
                             <?php if (($_SESSION['rol'] ?? '') === 'Admin'): ?>
-                            <td>
+                            <td data-label="Acciones" class="td-actions">
                                 <a href="eliminar_venta_ma.php?id=<?= (int)$v['id'] ?>"
                                    class="btn btn-sm btn-danger"
                                    onclick="return confirm('¿Seguro que deseas eliminar esta venta?')">
@@ -461,7 +528,9 @@ $stmt2->close();
                         </tr>
                     <?php endforeach; endif; ?>
                 </tbody>
-                <tfoot class="table-light">
+
+                <!-- Totales (desktop) -->
+                <tfoot class="table-light tfoot-desktop">
                     <tr>
                         <th colspan="7" class="text-end">Totales (Semana):</th>
                         <th class="text-end"><?= n2($total_monto) ?></th>
@@ -477,6 +546,20 @@ $stmt2->close();
                     </tr>
                 </tfoot>
             </table>
+        </div>
+
+        <!-- Totales (mobile compact) -->
+        <div class="totales-mini">
+            <div class="d-flex justify-content-between">
+                <span class="text-muted">Total semana (monto)</span>
+                <strong>$ <?= n2($total_monto) ?></strong>
+            </div>
+            <?php if ($mostrarComision): ?>
+            <div class="d-flex justify-content-between">
+                <span class="text-muted">Total comisión MA</span>
+                <strong>$ <?= n2($total_com_ma) ?></strong>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 

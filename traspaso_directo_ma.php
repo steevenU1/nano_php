@@ -269,6 +269,39 @@ if ($histEnabled) {
   table td, table th{vertical-align:middle}
   .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
   .cart-sticky{position:sticky; top:0; z-index:10}
+
+  /* —— Responsividad sin cambiar estructura —— */
+
+  /* Sombra de “hay más” en zonas con scroll horizontal */
+  .table-responsive{ position:relative; }
+  .table-responsive::after{
+    content:''; position:absolute; top:0; right:0; width:16px; height:100%;
+    pointer-events:none; background:linear-gradient(to left, rgba(0,0,0,.06), rgba(0,0,0,0));
+    border-radius:0 .5rem .5rem 0;
+  }
+
+  /* Evitar desbordes de IMEIs/códigos y permitir cortes limpios en móvil */
+  @media (max-width:576px){
+    .table{ font-size:.95rem; }
+    .table > :not(caption) > * > * { padding:.55rem .6rem; }
+    .table th, .table td{ white-space:normal !important; word-break:break-word; overflow-wrap:anywhere; }
+    .mono{ word-break:break-all; overflow-wrap:anywhere; }
+
+    /* Encabezados fijos dentro del contenedor con scroll */
+    .table thead th{
+      position:sticky; top:0; z-index:2;
+      background:var(--bs-table-bg, #fff);
+      box-shadow: inset 0 -1px 0 rgba(0,0,0,.075);
+    }
+
+    /* Mejor tacto en controles */
+    .btn, .form-control, .form-select{ min-height:40px; }
+    .btn-group{ flex-wrap:wrap; }
+    .btn-group .btn{ margin-bottom:6px; }
+
+    /* El carrito deja de ser sticky en pantallas chicas para no tapar contenido */
+    .cart-sticky{ position:static; top:auto; }
+  }
 </style>
 </head>
 <body>
@@ -628,6 +661,18 @@ if (checkAll) {
 
 // Conteo inicial
 updateCartUI();
+
+// Inyectar meta viewport si no existe (para móvil)
+(function () {
+  try {
+    if (!document.querySelector('meta[name="viewport"]')) {
+      var m = document.createElement('meta');
+      m.name = 'viewport';
+      m.content = 'width=device-width, initial-scale=1';
+      document.head.appendChild(m);
+    }
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>

@@ -174,6 +174,41 @@ $topProv = array_slice($saldoPorProveedor, 0, 5, true);
 ?>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
+<style>
+  /* ——— Responsivo sin cambiar estructura/columnas ——— */
+
+  /* Sombra de “hay más” en contenedores con scroll horizontal */
+  .table-responsive {
+    position: relative;
+  }
+  .table-responsive::after {
+    content:''; position:absolute; top:0; right:0; width:16px; height:100%;
+    pointer-events:none;
+    background: linear-gradient(to left, rgba(0,0,0,.06), rgba(0,0,0,0));
+    border-radius: 0 .5rem .5rem 0;
+  }
+
+  /* Evitar desbordes y permitir cortes limpios en móvil */
+  @media (max-width: 576px) {
+    .table { font-size: .95rem; }
+    .table > :not(caption) > * > * { padding: .55rem .6rem; } /* tocable */
+    .table th, .table td {
+      white-space: normal !important;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    /* Encabezados pegajosos dentro del contenedor con scroll */
+    .table thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--bs-table-bg, #fff);
+      box-shadow: inset 0 -1px 0 rgba(0,0,0,.075);
+    }
+    /* Botones e inputs a ancho cómodo */
+    .btn, .form-control, .form-select { min-height: 40px; }
+    .btn-group .btn { min-height: 36px; }
+  }
+</style>
+
 <div class="container my-4">
   <?php if (isset($_GET['msg'])): ?>
     <div class="alert alert-info alert-dismissible fade show" role="alert">
@@ -452,6 +487,20 @@ $topProv = array_slice($saldoPorProveedor, 0, 5, true);
   </div>
 
 </div>
+
+<!-- Viewport meta (sin tocar <head>): se inyecta para móviles -->
+<script>
+  (function () {
+    try {
+      if (!document.querySelector('meta[name="viewport"]')) {
+        var m = document.createElement('meta');
+        m.name = 'viewport';
+        m.content = 'width=device-width, initial-scale=1';
+        document.head.appendChild(m);
+      }
+    } catch(e) {}
+  })();
+</script>
 
 <!-- 🔹 Forzar título de la pestaña al final para que prevalezca -->
 <script>

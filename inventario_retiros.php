@@ -135,57 +135,95 @@ $stmt->execute();
 $historial = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 ?>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Retiros de Inventario — Central</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
+  <style>
+    /* No ocultamos columnas ni cambiamos estructura: solo responsivo/legible */
+    .table-wrap { position: relative; }
+    .table-wrap::after {
+      content: ''; position: absolute; top: 0; right: 0; width: 16px; height: 100%;
+      pointer-events: none;
+      background: linear-gradient(to left, rgba(0,0,0,.06), rgba(0,0,0,0));
+      border-radius: 0 .5rem .5rem 0;
+    }
+    /* Que no se rompa la tabla pero sí puedan quebrar textos largos (IMEI/código) */
+    td, th { white-space: nowrap; }
+    td.wrap, th.wrap { white-space: normal; }
+    .break-any { word-break: break-word; overflow-wrap: anywhere; }
+
+    /* Touch targets un poco más grandes para checkbox en móviles */
+    @media (max-width: 576px) {
+      .checkbox-big { transform: scale(1.2); transform-origin: left center; }
+      .table-sm > :not(caption) > * > * { padding: .5rem .6rem; } /* compacto pero tocable */
+      .filters-sticky { position: sticky; top: 0; z-index: 5; background: #f8f9fa; padding-top: .25rem; }
+      .btn-xs-full { width: 100%; }
+    }
+  </style>
+</head>
+<body class="bg-light">
 <div class="container-fluid my-3">
+
   <h3 class="mb-2">Retiros de Inventario — Central (Almacén Angelopolis)</h3>
   <p class="text-muted">Operación restringida a la sucursal <strong><?= htmlspecialchars($nombreCentral) ?></strong>. Solo Admin.</p>
 
   <?= $alert ?>
 
   <!-- === Filtros de búsqueda === -->
-  <form class="row g-2 mb-3" method="get">
-    <div class="col-md-4">
+  <form class="row g-2 mb-3 filters-sticky" method="get">
+    <div class="col-12 col-md-4">
       <input type="text" class="form-control" name="q" placeholder="Buscar por marca, modelo, color, IMEI o código" value="<?= htmlspecialchars($f_q) ?>">
     </div>
-    <div class="col-md-2">
+    <div class="col-6 col-md-2">
       <button type="submit" class="btn btn-primary w-100">Buscar</button>
+    </div>
+    <div class="col-6 col-md-2">
+      <a href="?q=" class="btn btn-outline-secondary w-100">Limpiar</a>
     </div>
   </form>
 
   <!-- === Tabla disponibles === -->
   <form method="post" action="inventario_retiros_guardar.php">
     <input type="hidden" name="id_sucursal" value="<?= $idCentral ?>">
-    <table class="table table-bordered table-sm align-middle">
-      <thead class="table-light">
-        <tr>
-          <th><input type="checkbox" id="chkAll"></th>
-          <th>Marca</th>
-          <th>Modelo</th>
-          <th>Capacidad</th>
-          <th>Color</th>
-          <th>IMEI</th>
-          <th>Código</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php if (count($itemsDisponibles) === 0): ?>
-          <tr><td colspan="7" class="text-center">Sin disponibles en <?= htmlspecialchars($nombreCentral) ?></td></tr>
-        <?php else: foreach ($itemsDisponibles as $it): ?>
+
+    <div class="table-responsive table-wrap">
+      <table class="table table-bordered table-sm align-middle">
+        <thead class="table-light">
           <tr>
-            <td><input type="checkbox" name="ids[]" value="<?= $it['id_inventario'] ?>"></td>
-            <td><?= htmlspecialchars($it['marca']) ?></td>
-            <td><?= htmlspecialchars($it['modelo']) ?></td>
-            <td><?= htmlspecialchars($it['capacidad']) ?></td>
-            <td><?= htmlspecialchars($it['color']) ?></td>
-            <td><?= htmlspecialchars($it['imei1']) ?></td>
-            <td><?= htmlspecialchars($it['codigo_producto']) ?></td>
+            <th style="width:36px"><input type="checkbox" id="chkAll"></th>
+            <th>Marca</th>
+            <th>Modelo</th>
+            <th>Capacidad</th>
+            <th>Color</th>
+            <th>IMEI</th>
+            <th>Código</th>
           </tr>
-        <?php endforeach; endif; ?>
-      </tbody>
-    </table>
-    <div class="row g-2">
-      <div class="col-md-3">
+        </thead>
+        <tbody>
+          <?php if (count($itemsDisponibles) === 0): ?>
+            <tr><td colspan="7" class="text-center">Sin disponibles en <?= htmlspecialchars($nombreCentral) ?></td></tr>
+          <?php else: foreach ($itemsDisponibles as $it): ?>
+            <tr>
+              <td><input type="checkbox" class="checkbox-big" name="ids[]" value="<?= $it['id_inventario'] ?>"></td>
+              <td class="wrap"><?= htmlspecialchars($it['marca']) ?></td>
+              <td class="wrap"><?= htmlspecialchars($it['modelo']) ?></td>
+              <td><?= htmlspecialchars($it['capacidad']) ?></td>
+              <td class="wrap"><?= htmlspecialchars($it['color']) ?></td>
+              <td class="wrap break-any"><?= htmlspecialchars($it['imei1']) ?></td>
+              <td class="wrap break-any"><?= htmlspecialchars($it['codigo_producto']) ?></td>
+            </tr>
+          <?php endforeach; endif; ?>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="row g-2 mt-2">
+      <div class="col-12 col-md-3">
         <select name="motivo" class="form-select" required>
           <option value="">-- Motivo --</option>
           <option value="Baja">Baja</option>
@@ -193,14 +231,14 @@ $stmt->close();
           <option value="Otro">Otro</option>
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-12 col-md-3">
         <input type="text" name="destino" class="form-control" placeholder="Destino / Referencia">
       </div>
-      <div class="col-md-4">
+      <div class="col-12 col-md-4">
         <input type="text" name="nota" class="form-control" placeholder="Nota">
       </div>
-      <div class="col-md-2">
-        <button type="submit" class="btn btn-danger w-100">Retirar seleccionados</button>
+      <div class="col-12 col-md-2 d-grid">
+        <button type="submit" class="btn btn-danger btn-xs-full">Retirar seleccionados</button>
       </div>
     </div>
   </form>
@@ -211,7 +249,7 @@ $stmt->close();
   <h5>Historial de retiros</h5>
   <form class="row g-2 mb-3">
     <input type="hidden" name="view" value="historial">
-    <div class="col-md-3">
+    <div class="col-12 col-md-3">
       <select name="h_motivo" class="form-select">
         <option value="">-- Motivo --</option>
         <option value="Baja" <?= $h_motivo==='Baja'?'selected':'' ?>>Baja</option>
@@ -219,67 +257,70 @@ $stmt->close();
         <option value="Otro" <?= $h_motivo==='Otro'?'selected':'' ?>>Otro</option>
       </select>
     </div>
-    <div class="col-md-3">
+    <div class="col-12 col-md-3">
       <input type="text" name="h_folio" class="form-control" placeholder="Folio" value="<?= htmlspecialchars($h_qfolio) ?>">
     </div>
-    <div class="col-md-3">
+    <div class="col-12 col-md-3">
       <select name="h_estado" class="form-select">
         <option value="">-- Estado --</option>
         <option value="vigente" <?= $h_estado==='vigente'?'selected':'' ?>>Vigente</option>
         <option value="revertido" <?= $h_estado==='revertido'?'selected':'' ?>>Revertido</option>
       </select>
     </div>
-    <div class="col-md-3">
+    <div class="col-12 col-md-3">
       <button type="submit" class="btn btn-primary w-100">Filtrar</button>
     </div>
   </form>
 
-  <table class="table table-bordered table-sm align-middle">
-    <thead class="table-light">
-      <tr>
-        <th>Folio</th>
-        <th>Fecha</th>
-        <th>Motivo</th>
-        <th>Destino</th>
-        <th>Cantidad</th>
-        <th>Usuario</th>
-        <th>Estado</th>
-        <th>Acciones</th>
-      </tr>
-    </thead>
-    <tbody>
-      <?php if (count($historial)===0): ?>
-        <tr><td colspan="8" class="text-center">Sin retiros</td></tr>
-      <?php else: foreach ($historial as $h): ?>
+  <div class="table-responsive table-wrap">
+    <table class="table table-bordered table-sm align-middle">
+      <thead class="table-light">
         <tr>
-          <td><?= htmlspecialchars($h['folio']) ?></td>
-          <td><?= htmlspecialchars($h['fecha']) ?></td>
-          <td><?= htmlspecialchars($h['motivo']) ?></td>
-          <td><?= htmlspecialchars($h['destino']) ?></td>
-          <td><?= (int)$h['cantidad'] ?></td>
-          <td><?= htmlspecialchars($h['usuario_nombre']) ?></td>
-          <td>
-            <?php if ($h['revertido']): ?>
-              <span class="badge bg-secondary">Revertido</span><br>
-              <small><?= htmlspecialchars($h['fecha_reversion']) ?></small>
-            <?php else: ?>
-              <span class="badge bg-success">Vigente</span>
-            <?php endif; ?>
-          </td>
-          <td>
-            <?php if (!$h['revertido']): ?>
-              <form method="post" action="inventario_retiros_revertir.php" onsubmit="return confirm('¿Revertir este retiro?')">
-                <input type="hidden" name="id" value="<?= $h['id'] ?>">
-                <button class="btn btn-sm btn-warning">Revertir</button>
-              </form>
-            <?php else: ?>
-              <em>-</em>
-            <?php endif; ?>
-          </td>
+          <th>Folio</th>
+          <th>Fecha</th>
+          <th>Motivo</th>
+          <th>Destino</th>
+          <th>Cantidad</th>
+          <th>Usuario</th>
+          <th>Estado</th>
+          <th>Acciones</th>
         </tr>
-      <?php endforeach; endif; ?>
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        <?php if (count($historial)===0): ?>
+          <tr><td colspan="8" class="text-center">Sin retiros</td></tr>
+        <?php else: foreach ($historial as $h): ?>
+          <tr>
+            <td class="wrap"><?= htmlspecialchars($h['folio']) ?></td>
+            <td><?= htmlspecialchars($h['fecha']) ?></td>
+            <td class="wrap"><?= htmlspecialchars($h['motivo']) ?></td>
+            <td class="wrap"><?= htmlspecialchars($h['destino']) ?></td>
+            <td><?= (int)$h['cantidad'] ?></td>
+            <td class="wrap"><?= htmlspecialchars($h['usuario_nombre']) ?></td>
+            <td>
+              <?php if ($h['revertido']): ?>
+                <span class="badge bg-secondary">Revertido</span><br>
+                <small><?= htmlspecialchars($h['fecha_reversion']) ?></small>
+              <?php else: ?>
+                <span class="badge bg-success">Vigente</span>
+              <?php endif; ?>
+            </td>
+            <td>
+              <?php if (!$h['revertido']): ?>
+                <form method="post" action="inventario_retiros_revertir.php" onsubmit="return confirm('¿Revertir este retiro?')">
+                  <input type="hidden" name="id" value="<?= $h['id'] ?>">
+                  <button class="btn btn-sm btn-warning btn-xs-full">Revertir</button>
+                </form>
+              <?php else: ?>
+                <em>-</em>
+              <?php endif; ?>
+            </td>
+          </tr>
+        <?php endforeach; endif; ?>
+      </tbody>
+    </table>
+  </div>
+
 </div>
 
 <script>
@@ -287,3 +328,5 @@ document.getElementById('chkAll')?.addEventListener('change',function(){
   document.querySelectorAll('input[name="ids[]"]').forEach(ch=>ch.checked=this.checked);
 });
 </script>
+</body>
+</html>

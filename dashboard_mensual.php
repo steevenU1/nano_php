@@ -21,6 +21,11 @@ function badgeFila($pct) {
     if ($pct === null) return '';
     return $pct>=100 ? 'table-success' : ($pct>=60 ? 'table-warning' : 'table-danger');
 }
+/* Quita prefijo NANORED del nombre de sucursal solo para visualizar */
+function limpiarNombreSucursal(string $n): string {
+    $t = preg_replace('/^\s*NANORED\s*/i', '', $n);
+    return trim($t);
+}
 
 /* -------------------------------
    Mes/Año seleccionados y rango
@@ -32,10 +37,14 @@ $inicioMes = sprintf('%04d-%02d-01', $anio, $mes);
 $finMes    = date('Y-m-t', strtotime($inicioMes));
 
 /* -------------------------------
-   Toggle gráfico (propias | ma)
+   Toggles gráfico
+   g: (propias | ma)
+   m: (monto | unidades)
 ---------------------------------*/
 $g = $_GET['g'] ?? 'propias';
 if ($g!=='propias' && $g!=='ma') $g='propias';
+$m = $_GET['m'] ?? 'monto';
+if ($m!=='monto' && $m!=='unidades') $m='monto';
 
 /* ======================================================
    0) Cuota mensual ejecutivos (POR EJECUTIVO)
@@ -133,7 +142,7 @@ while ($row = $res->fetch_assoc()) {
 
     $sucursalesPropias[] = [
         'id_sucursal'     => $id_suc,
-        'sucursal'        => $row['sucursal'],
+        'sucursal'        => limpiarNombreSucursal($row['sucursal']),
         'tipo'            => $row['tipo'],
         'unidades'        => (int)$row['unidades'],
         'ventas'          => (float)$row['ventas'],
@@ -208,7 +217,7 @@ while ($row = $resEj->fetch_assoc()) {
     $ejecutivos[] = [
         'id'             => (int)$row['id'],
         'nombre'         => $row['nombre'],
-        'sucursal'       => $row['sucursal'],
+        'sucursal'       => limpiarNombreSucursal($row['sucursal']),
         'unidades'       => (int)$row['unidades'],
         'ventas'         => (float)$row['ventas'],
         'sims_prepago'   => (int)$row['sims_prepago'],
@@ -283,7 +292,7 @@ $totalMAVentas   = 0.0;
 while ($row = $resMA->fetch_assoc()) {
     $sucursalesMA[] = [
         'id_sucursal' => (int)$row['id_sucursal'],
-        'sucursal'    => $row['sucursal'],
+        'sucursal'    => limpiarNombreSucursal($row['sucursal']),
         'tipo'        => $row['tipo'],
         'unidades'    => (int)$row['unidades'],
         'ventas'      => (float)$row['ventas'],
@@ -296,49 +305,106 @@ while ($row = $resMA->fetch_assoc()) {
 $stMA->close();
 
 /* ======================================================
-   6) Gráfico MENSUAL
+   6) Gráfico MENSUAL con switches (grupo + métrica)
 ====================================================== */
 if ($g === 'propias') {
-    $sqlChart = "
-      SELECT s.nombre AS sucursal,
-             SUM(
-               CASE
-                 WHEN v.id IS NULL THEN 0
-                 WHEN dv.id IS NULL THEN 0
-                 WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
-                      THEN IFNULL(v.precio_venta,0)
-                 ELSE 0
-               END
-             ) AS total_ventas
-      FROM sucursales s
-      LEFT JOIN ventas v
-        ON v.id_sucursal = s.id
-       AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-      LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-      WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia'
-      GROUP BY s.id
-    ";
+    if ($m === 'monto') {
+        $sqlChart = "
+          SELECT s.nombre AS sucursal,
+                 SUM(
+                   CASE
+                     WHEN v.id IS NULL THEN 0
+                     WHEN dv.id IS NULL THEN 0
+                     WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta=v.id)
+                          THEN IFNULL(v.precio_venta,0)
+                     ELSE 0
+                   END
+                 ) AS valor
+          FROM sucursales s
+          LEFT JOIN ventas v
+            ON v.id_sucursal = s.id
+           AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+          LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+          WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia'
+          GROUP BY s.id
+        ";
+    } else {
+        $sqlChart = "
+          SELECT s.nombre AS sucursal,
+                 SUM(
+                   CASE 
+                     WHEN dv.id IS NULL THEN 0
+                     WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                     WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN
+                       CASE WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN 2 ELSE 0 END
+                     ELSE 1
+                   END
+                 ) AS valor
+          FROM sucursales s
+          LEFT JOIN ventas v
+            ON v.id_sucursal = s.id
+           AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+          LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+          LEFT JOIN productos p ON p.id = dv.id_producto
+          WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Propia'
+          GROUP BY s.id
+        ";
+    }
 } else {
-    $sqlChart = "
-      SELECT s.nombre AS sucursal,
-             SUM(
-               CASE
-                 WHEN v.id IS NULL THEN 0
-                 WHEN dv.id IS NULL THEN 0
-                 WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta=v.id)
-                      THEN IFNULL(v.precio_venta,0)
-                 ELSE 0
-               END
-             ) AS total_ventas
-      FROM sucursales s
-      LEFT JOIN ventas v
-        ON v.id_sucursal = s.id
-       AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
-      LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
-      WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
-      GROUP BY s.id
-    ";
+    if ($m === 'monto') {
+        $sqlChart = "
+          SELECT s.nombre AS sucursal,
+                 SUM(
+                   CASE
+                     WHEN v.id IS NULL THEN 0
+                     WHEN dv.id IS NULL THEN 0
+                     WHEN dv.id = (SELECT MIN(dv3.id) FROM detalle_venta dv3 WHERE dv3.id_venta=v.id)
+                          THEN IFNULL(v.precio_venta,0)
+                     ELSE 0
+                   END
+                 ) AS valor
+          FROM sucursales s
+          LEFT JOIN ventas v
+            ON v.id_sucursal = s.id
+           AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+          LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+          WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
+          GROUP BY s.id
+        ";
+    } else {
+        $sqlChart = "
+          SELECT s.nombre AS sucursal,
+                 SUM(
+                   CASE 
+                     WHEN v.id IS NULL THEN 0
+                     WHEN v.origen_ma='nano' THEN
+                        CASE 
+                           WHEN dv.id IS NULL THEN 
+                               CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                           WHEN dv.id = (SELECT MIN(dv2.id) FROM detalle_venta dv2 WHERE dv2.id_venta = v.id) THEN
+                               CASE WHEN REPLACE(LOWER(v.tipo_venta),' ','')='financiamiento+combo' THEN 2 ELSE 1 END
+                           ELSE 0
+                        END
+                     ELSE
+                        CASE 
+                           WHEN dv.id IS NULL THEN 0
+                           WHEN LOWER(p.tipo_producto) IN ('modem','mifi') THEN 0
+                           ELSE 1
+                        END
+                   END
+                 ) AS valor
+          FROM sucursales s
+          LEFT JOIN ventas v
+            ON v.id_sucursal = s.id
+           AND DATE(CONVERT_TZ(v.fecha_venta,'+00:00','-06:00')) BETWEEN ? AND ?
+          LEFT JOIN detalle_venta dv ON dv.id_venta = v.id
+          LEFT JOIN productos p      ON p.id       = dv.id_producto
+          WHERE s.tipo_sucursal='Tienda' AND s.subtipo='Master Admin'
+          GROUP BY s.id
+        ";
+    }
 }
+
 $stmtC = $conn->prepare($sqlChart);
 $stmtC->bind_param("ss", $inicioMes, $finMes);
 $stmtC->execute();
@@ -346,15 +412,17 @@ $resChart = $stmtC->get_result();
 
 $rowsChart = [];
 while ($r = $resChart->fetch_assoc()) {
-    $r['total_ventas'] = (float)$r['total_ventas'];
-    $rowsChart[] = $r;
+    $rowsChart[] = [
+        'sucursal' => limpiarNombreSucursal($r['sucursal']),
+        'valor'    => (float)$r['valor']
+    ];
 }
-usort($rowsChart, fn($a,$b) => $b['total_ventas'] <=> $a['total_ventas']);
+usort($rowsChart, fn($a,$b) => $b['valor'] <=> $a['valor']);
 $top = array_slice($rowsChart, 0, 15);
 $otrasVal = 0;
-for ($i=15; $i<count($rowsChart); $i++) { $otrasVal += $rowsChart[$i]['total_ventas']; }
+for ($i=15; $i<count($rowsChart); $i++) { $otrasVal += $rowsChart[$i]['valor']; }
 $labelsGraf = array_map(fn($r)=>$r['sucursal'],$top);
-$dataGraf   = array_map(fn($r)=>round($r['total_ventas'],2),$top);
+$dataGraf   = array_map(fn($r)=>round($r['valor'],2),$top);
 if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
 ?>
 <!DOCTYPE html>
@@ -385,6 +453,12 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
       .form-select, .btn { font-size: .9rem; }
       .table th, .table td { padding: .45rem .5rem; font-size: .86rem; }
     }
+    .btn-download{
+      border: 1px solid rgba(255,255,255,.6);
+      background: rgba(255,255,255,.05);
+      backdrop-filter: blur(4px);
+    }
+    .btn-download svg{ width:16px; height:16px; vertical-align: -3px;}
   </style>
 </head>
 <body class="bg-light">
@@ -396,8 +470,8 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
     <form method="GET" class="row g-2 align-items-center">
       <div class="col-6">
         <select name="mes" class="form-select form-select-sm">
-          <?php for ($m=1;$m<=12;$m++): ?>
-            <option value="<?= $m ?>" <?= $m==$mes?'selected':'' ?>><?= nombreMes($m) ?></option>
+          <?php for ($mSel=1;$mSel<=12;$mSel++): ?>
+            <option value="<?= $mSel ?>" <?= $mSel==$mes?'selected':'' ?>><?= nombreMes($mSel) ?></option>
           <?php endfor; ?>
         </select>
       </div>
@@ -412,6 +486,7 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
         <button class="btn btn-primary btn-sm w-100">Ir</button>
       </div>
       <input type="hidden" name="g" value="<?= htmlspecialchars($g) ?>">
+      <input type="hidden" name="m" value="<?= htmlspecialchars($m) ?>">
     </form>
   </div>
 
@@ -452,20 +527,26 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
 
   <!-- Gráfica mensual -->
   <div class="card shadow mb-3">
-    <div class="card-header bg-dark text-white position-relative d-flex align-items-center">
-      <span>Acumulado mensual por sucursal (monto)</span>
-      <div class="position-absolute top-50 end-0 translate-middle-y pe-2">
+    <div class="card-header bg-dark text-white position-relative d-flex align-items-center gap-2 flex-wrap">
+      <span>Acumulado mensual por sucursal</span>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <!-- Switch grupo -->
         <div class="btn-group btn-group-sm" role="group" aria-label="Grupo gráfico">
-          <a class="btn <?= $g==='propias'?'btn-primary':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=propias">Propias</a>
-          <a class="btn <?= $g==='ma'?'btn-primary':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=ma">Master Admin</a>
+          <a class="btn <?= $g==='propias'?'btn-primary':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=propias&m=<?= htmlspecialchars($m) ?>">Propias</a>
+          <a class="btn <?= $g==='ma'?'btn-primary':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=ma&m=<?= htmlspecialchars($m) ?>">Master Admin</a>
+        </div>
+        <!-- Switch métrica -->
+        <div class="btn-group btn-group-sm" role="group" aria-label="Métrica">
+          <a class="btn <?= $m==='monto'?'btn-warning':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=<?= htmlspecialchars($g) ?>&m=monto">$</a>
+          <a class="btn <?= $m==='unidades'?'btn-warning':'btn-outline-light' ?>" href="?mes=<?= $mes ?>&anio=<?= $anio ?>&g=<?= htmlspecialchars($g) ?>&m=unidades">uds</a>
         </div>
       </div>
     </div>
     <div class="card-body">
       <div class="chart-wrap" style="position:relative; height:320px;">
-        <canvas id="chartMensualMonto"></canvas>
+        <canvas id="chartMensual"></canvas>
       </div>
-      <small class="text-muted d-block mt-2">* Top-15 por monto mensual + “Otras”.</small>
+      <small class="text-muted d-block mt-2">* Top-15 por <?= $m==='monto' ? 'monto mensual' : 'unidades mensuales' ?> + “Otras”.</small>
     </div>
   </div>
 
@@ -480,21 +561,34 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
     <!-- Sucursales PROPIAS -->
     <div class="tab-pane fade show active" id="tab-suc" role="tabpanel">
       <div class="card shadow mt-3">
-        <div class="card-header bg-primary text-white">Sucursales (Propias)</div>
-        <div class="card-body p-0">
+        <div class="card-header bg-primary text-white position-relative">
+          Sucursales (Propias)
+          <button class="btn btn-sm btn-light btn-download position-absolute top-50 end-0 translate-middle-y me-2"
+                  onclick="descargarTabla('wrapSucursales','mensual_sucursales_propias.png')" title="Descargar imagen">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 4l1.2-2h2.8l1.2 2H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4.4zM12 18a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6z"/></svg>
+          </button>
+        </div>
+        <div class="card-body p-0" id="wrapSucursales">
           <div class="table-responsive">
             <table class="table table-bordered table-striped table-sm mb-0">
               <thead class="table-dark">
                 <tr>
                   <th>Sucursal</th>
                   <th class="d-none d-md-table-cell">Tipo</th>
+                  <!-- Desktop -->
                   <th class="d-none d-md-table-cell">Unidades</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
                   <th class="d-none d-md-table-cell">Cuota Unid.</th>
-                  <th>Ventas $</th>
-                  <th>Cuota $</th>
-                  <th>% Cumplimiento</th>
+                  <th class="d-none d-md-table-cell">Ventas $</th>
+                  <th class="d-none d-md-table-cell">Cuota $</th>
+                  <th class="d-none d-md-table-cell">% Cumplimiento</th>
+                  <!-- Móvil abreviado -->
+                  <th class="d-table-cell d-md-none text-center">uds</th>
+                  <th class="d-table-cell d-md-none text-center">Pre</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <th class="d-table-cell d-md-none text-center">$</th>
+                  <th class="d-table-cell d-md-none text-center">%C</th>
                 </tr>
               </thead>
               <tbody>
@@ -505,13 +599,20 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr class="<?= $fila ?>">
                   <td><?= htmlspecialchars($s['sucursal']) ?></td>
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['tipo']) ?></td>
+                  <!-- Desktop -->
                   <td class="d-none d-md-table-cell"><?= (int)$s['unidades'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['cuota_unidades'] ?></td>
-                  <td>$<?= number_format($s['ventas'],2) ?></td>
-                  <td>$<?= number_format($s['cuota_monto'],2) ?></td>
-                  <td><?= round($s['cumplimiento'],1) ?>% <?= $estado ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($s['cuota_monto'],2) ?></td>
+                  <td class="d-none d-md-table-cell"><?= round($s['cumplimiento'],1) ?>% <?= $estado ?></td>
+                  <!-- Móvil -->
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['unidades'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_prepago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_pospago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center">$<?= number_format($s['ventas'],0) ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= round($s['cumplimiento'],1) ?>%</td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -524,21 +625,34 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
     <!-- Ejecutivos (Propias) -->
     <div class="tab-pane fade" id="tab-ej" role="tabpanel">
       <div class="card shadow mt-3">
-        <div class="card-header bg-dark text-white">Productividad mensual por Ejecutivo (Propias)</div>
-        <div class="card-body p-0">
+        <div class="card-header bg-dark text-white position-relative">
+          Productividad mensual por Ejecutivo (Propias)
+          <button class="btn btn-sm btn-light btn-download position-absolute top-50 end-0 translate-middle-y me-2"
+                  onclick="descargarTabla('wrapEjecutivos','mensual_ejecutivos_propias.png')" title="Descargar imagen">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 4l1.2-2h2.8l1.2 2H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4.4zM12 18a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6z"/></svg>
+          </button>
+        </div>
+        <div class="card-body p-0" id="wrapEjecutivos">
           <div class="table-responsive">
             <table class="table table-striped table-bordered table-sm mb-0">
               <thead class="table-dark">
                 <tr>
                   <th>Ejecutivo</th>
                   <th class="d-none d-md-table-cell">Sucursal</th>
-                  <th>Unidades</th>
+                  <!-- Desktop -->
+                  <th class="d-none d-md-table-cell">Unidades</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
                   <th class="d-none d-md-table-cell">Ventas $</th>
                   <th class="d-none d-md-table-cell">Cuota Mes (u)</th>
-                  <th>% Cumpl. (Unid.)</th>
+                  <th class="d-none d-md-table-cell">% Cumpl. (Unid.)</th>
                   <th class="d-none d-md-table-cell">Progreso</th>
+                  <!-- Móvil abreviado -->
+                  <th class="d-table-cell d-md-none text-center">uds</th>
+                  <th class="d-table-cell d-md-none text-center">Pre</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <th class="d-table-cell d-md-none text-center">$</th>
+                  <th class="d-table-cell d-md-none text-center">%C</th>
                 </tr>
               </thead>
               <tbody>
@@ -551,12 +665,13 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr class="<?= $fila ?>">
                   <td><?= htmlspecialchars($e['nombre']) ?></td>
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($e['sucursal']) ?></td>
-                  <td><?= (int)$e['unidades'] ?></td>
+                  <!-- Desktop -->
+                  <td class="d-none d-md-table-cell"><?= (int)$e['unidades'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$e['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$e['sims_pospago'] ?></td>
                   <td class="d-none d-md-table-cell">$<?= number_format($e['ventas'],2) ?></td>
                   <td class="d-none d-md-table-cell"><?= number_format($e['cuota_unidades'],2) ?></td>
-                  <td><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
+                  <td class="d-none d-md-table-cell"><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
                   <td class="d-none d-md-table-cell" style="min-width:160px">
                     <div class="progress">
                       <div class="progress-bar <?= $barClass ?>" role="progressbar"
@@ -565,6 +680,12 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                       </div>
                     </div>
                   </td>
+                  <!-- Móvil -->
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['unidades'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_prepago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_pospago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center">$<?= number_format($e['ventas'],0) ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -577,18 +698,30 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
     <!-- Master Admin -->
     <div class="tab-pane fade" id="tab-ma" role="tabpanel">
       <div class="card shadow mt-3">
-        <div class="card-header bg-secondary text-white">Sucursales (Master Admin)</div>
-        <div class="card-body p-0">
+        <div class="card-header bg-secondary text-white position-relative">
+          Sucursales (Master Admin)
+          <button class="btn btn-sm btn-light btn-download position-absolute top-50 end-0 translate-middle-y me-2"
+                  onclick="descargarTabla('wrapMA','mensual_master_admin.png')" title="Descargar imagen">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 4l1.2-2h2.8l1.2 2H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4.4zM12 18a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6z"/></svg>
+          </button>
+        </div>
+        <div class="card-body p-0" id="wrapMA">
           <div class="table-responsive">
             <table class="table table-bordered table-striped table-sm mb-0">
               <thead class="table-dark">
                 <tr>
                   <th>Sucursal</th>
                   <th class="d-none d-md-table-cell">Tipo</th>
-                  <th>Unidades</th>
+                  <!-- Desktop -->
+                  <th class="d-none d-md-table-cell">Unidades</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
-                  <th>Ventas $</th>
+                  <th class="d-none d-md-table-cell">Ventas $</th>
+                  <!-- Móvil -->
+                  <th class="d-table-cell d-md-none text-center">uds</th>
+                  <th class="d-table-cell d-md-none text-center">Pre</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <th class="d-table-cell d-md-none text-center">$</th>
                 </tr>
               </thead>
               <tbody>
@@ -596,10 +729,16 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr>
                   <td><?= htmlspecialchars($s['sucursal']) ?></td>
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['tipo']) ?></td>
-                  <td><?= (int)$s['unidades'] ?></td>
+                  <!-- Desktop -->
+                  <td class="d-none d-md-table-cell"><?= (int)$s['unidades'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
-                  <td>$<?= number_format($s['ventas'],2) ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
+                  <!-- Móvil -->
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['unidades'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_prepago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_pospago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center">$<?= number_format($s['ventas'],0) ?></td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -612,15 +751,30 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
   </div>
 </div>
 
+<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script> -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script>
 const labelsGraf = <?= json_encode($labelsGraf, JSON_UNESCAPED_UNICODE) ?>;
 const dataGraf   = <?= json_encode($dataGraf, JSON_UNESCAPED_UNICODE) ?>;
+const metric     = <?= json_encode($m) ?>; // 'monto' | 'unidades'
 
-new Chart(document.getElementById('chartMensualMonto').getContext('2d'), {
+// Formateadores
+const yTickFormatter = (v) => (metric === 'monto')
+  ? '$' + Number(v).toLocaleString()
+  : Number(v).toLocaleString('es-MX');
+
+const tooltipLabel = (ctx) => {
+  const val = Number(ctx.parsed.y);
+  return (metric === 'monto')
+    ? ` Monto: $${val.toLocaleString()}`
+    : ` Unidades: ${val.toLocaleString('es-MX')}`;
+};
+
+new Chart(document.getElementById('chartMensual').getContext('2d'), {
   type: 'bar',
   data: { labels: labelsGraf, datasets: [{
-    label: 'Ventas ($)',
+    label: metric === 'monto' ? 'Ventas ($)' : 'Unidades',
     data: dataGraf,
     borderWidth: 0,
     maxBarThickness: 28,
@@ -632,18 +786,33 @@ new Chart(document.getElementById('chartMensualMonto').getContext('2d'), {
     maintainAspectRatio: false,
     plugins: {
       legend: { display: false },
-      tooltip: { callbacks: { label: (ctx) => ` Ventas: $${Number(ctx.parsed.y).toLocaleString()}` } }
+      tooltip: { callbacks: { label: tooltipLabel } }
     },
     scales: {
       x: { ticks: { autoSkip: false, maxRotation: 45, minRotation: 45 } },
       y: {
         beginAtZero: true,
-        ticks: { callback: (v) => '$' + Number(v).toLocaleString() },
-        title: { display: true, text: 'Ventas ($)' }
+        ticks: { callback: yTickFormatter },
+        title: { display: true, text: metric === 'monto' ? 'Ventas ($)' : 'Unidades' }
       }
     }
   }
 });
+
+// Descargar imagen de rankings (tablas)
+function descargarTabla(wrapperId, filename){
+  const node = document.getElementById(wrapperId);
+  if(!node) return;
+  const prevBg = node.style.backgroundColor;
+  node.style.backgroundColor = '#ffffff'; // fondo sólido para export
+  html2canvas(node, {scale: 2, useCORS: true}).then(canvas => {
+    node.style.backgroundColor = prevBg || '';
+    const a = document.createElement('a');
+    a.download = filename || 'tabla.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  });
+}
 </script>
 </body>
 </html>
