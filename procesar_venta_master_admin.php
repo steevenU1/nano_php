@@ -36,6 +36,10 @@ $origen_ma         = ($_POST['origen_ma'] ?? 'nano');               // 'nano' | 
 // Snapshot del subtipo de la sucursal (viene desde el form)
 $origen_subtipo    = trim($_POST['origen_subtipo'] ?? '');          // 'Master Admin' | 'Socio' (u otros)
 
+// Inventarios seleccionados (cuando origen = nano)
+$equipo1InvId      = (int)($_POST['equipo1'] ?? 0);                 // inventario.id
+$equipo2InvId      = (int)($_POST['equipo2'] ?? 0);                 // inventario.id (combo opcional)
+
 /* =========================
    FECHA DE VENTA
 ========================= */
@@ -77,6 +81,15 @@ if ($requiereTAG && $tag === '') {
 if ($origen_ma === 'nano') {
     if ($nombreCliente === '' || $telefonoCliente === '') {
         die("Error: para origen Nano, nombre y teléfono del cliente son obligatorios.");
+    }
+    if ($equipo1InvId <= 0) {
+        die("Error: selecciona el equipo principal del inventario.");
+    }
+    if ($tipoVenta === 'Financiamiento+Combo' && $equipo2InvId <= 0) {
+        die("Error: selecciona el equipo combo del inventario.");
+    }
+    if ($equipo1InvId > 0 && $equipo2InvId > 0 && $equipo1InvId === $equipo2InvId) {
+        die("Error: equipo principal y combo no pueden ser el mismo inventario.");
     }
 }
 
@@ -127,7 +140,7 @@ function obtenerComisionDesdeCualquierId(mysqli $conn, int $id): float {
     return $val;
 }
 
-// Sumar comisiones si vienen como arreglo productos[]
+// Sumar comisiones si vienen como arreglo productos[] (legacy)
 $comisionSumaProductos = 0.0;
 if (isset($_POST['productos']) && is_array($_POST['productos'])) {
     foreach ($_POST['productos'] as $prod) {
@@ -143,12 +156,10 @@ if (isset($_POST['productos']) && is_array($_POST['productos'])) {
     }
 }
 
-// Fallback: si no vino el arreglo productos, intentar con selects equipo1/equipo2
+// Fallback: si no vino el arreglo productos, intentar con selects equipo1/equipo2 (inventario.id)
 if ($comisionSumaProductos == 0.0) {
-    $equipo1 = (int)($_POST['equipo1'] ?? 0);
-    $equipo2 = (int)($_POST['equipo2'] ?? 0);
-    if ($equipo1 > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo1);
-    if ($equipo2 > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo2);
+    if ($equipo1InvId > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo1InvId);
+    if ($equipo2InvId > 0) $comisionSumaProductos += obtenerComisionDesdeCualquierId($conn, $equipo2InvId);
 }
 
 // Cálculo por defecto (MA):
@@ -184,27 +195,6 @@ if (!$stmt) {
     die("Error en prepare(): " . $conn->error);
 }
 
-/*
-Tipos (18):
-1 s tag
-2 s nombre_cliente
-3 s telefono_cliente
-4 s tipo_venta
-5 d precio_venta
-6 d enganche
-7 s forma_pago_enganche
-8 d enganche_efectivo
-9 d enganche_tarjeta
-10 i plazo_semanas
-11 s financiera
-12 i id_sucursal
-13 i id_usuario
-14 s origen_ma
-15 s origen_subtipo
-16 s comentarios
-17 s fecha_venta
-18 d comision_master_admin
-*/
 $stmt->bind_param(
     "ssssddsddisiissssd",
     $tag, $nombreCliente, $telefonoCliente,
@@ -215,41 +205,121 @@ $stmt->bind_param(
 );
 
 $stmt->execute();
-
 $idVenta = $stmt->insert_id;
 $stmt->close();
 
 /* =========================
-   DETALLE DE PRODUCTOS (opcional)
+   DETALLE + MOVIMIENTO INVENTARIO
+   - Prioriza equipo1/equipo2 (inventario.id exacto) cuando origen = nano.
+   - Si no vienen, usa el bloque legacy de productos[].
 ========================= */
-if (isset($_POST['productos']) && is_array($_POST['productos'])) {
-    foreach ($_POST['productos'] as $prod) {
-        $idProducto     = (int)($prod['id_producto'] ?? 0);
-        $imei1          = trim($prod['imei1'] ?? '');
-        $precioUnitario = (float)($prod['precio_unitario'] ?? 0);
 
-        if ($idProducto > 0) {
-            $sqlDet = "INSERT INTO detalle_venta (id_venta, id_producto, imei1, precio_unitario)
-                       VALUES (?,?,?,?)";
-            $stmtDet = $conn->prepare($sqlDet);
-            if ($stmtDet) {
+try {
+    $conn->begin_transaction();
+
+    if ($origen_ma === 'nano' && ($equipo1InvId > 0 || $equipo2InvId > 0)) {
+
+        // Helper para tomar un inventario específico y venderlo
+        $sqlSel = "
+            SELECT i.id AS id_inventario, i.id_sucursal, i.estatus, i.id_producto,
+                   p.imei1, p.imei2, p.precio_lista
+            FROM inventario i
+            JOIN productos p ON p.id = i.id_producto
+            WHERE i.id = ?
+            FOR UPDATE
+        ";
+        $sqlUpd = "
+            UPDATE inventario
+               SET estatus='Vendido'
+             WHERE id=? AND id_sucursal=? AND (estatus IN ('Disponible','DISPONIBLE','Stock','EN STOCK'))
+             LIMIT 1
+        ";
+        $stmtSel = $conn->prepare($sqlSel);
+        $stmtUpd = $conn->prepare($sqlUpd);
+        $stmtDet = $conn->prepare("INSERT INTO detalle_venta (id_venta, id_producto, imei1, precio_unitario) VALUES (?,?,?,?)");
+
+        $procesar = function(int $invId) use ($conn, $idSucursal, $stmtSel, $stmtUpd, $stmtDet, $idVenta) {
+            if ($invId <= 0) return;
+
+            $stmtSel->bind_param("i", $invId);
+            $stmtSel->execute();
+            $res = $stmtSel->get_result();
+            if (!$row = $res->fetch_assoc()) {
+                throw new Exception("Inventario {$invId} no encontrado.");
+            }
+
+            // Validaciones de sucursal y disponibilidad
+            if ((int)$row['id_sucursal'] !== $idSucursal) {
+                throw new Exception("El inventario {$invId} no pertenece a la sucursal seleccionada.");
+            }
+            $estatusOk = in_array(strtoupper((string)$row['estatus']), ['DISPONIBLE','STOCK','EN STOCK'], true);
+            if (!$estatusOk) {
+                throw new Exception("El inventario {$invId} no está disponible.");
+            }
+
+            // Marcar como vendido este ID EXACTO
+            $stmtUpd->bind_param("ii", $invId, $idSucursal);
+            $stmtUpd->execute();
+            if ($stmtUpd->affected_rows !== 1) {
+                throw new Exception("No se pudo actualizar el inventario {$invId} a 'Vendido'.");
+            }
+
+            // Snapshot al detalle (guardamos precio_lista como precio_unitario)
+            $idProducto     = (int)$row['id_producto'];
+            $imei1          = (string)$row['imei1'];
+            $precioUnitario = (float)($row['precio_lista'] ?? 0);
+
+            $stmtDet->bind_param("iisd", $idVenta, $idProducto, $imei1, $precioUnitario);
+            $stmtDet->execute();
+        };
+
+        // equipo1 es obligatorio en nano
+        $procesar($equipo1InvId);
+
+        // equipo2 solo si aplica combo
+        if ($tipoVenta === 'Financiamiento+Combo' && $equipo2InvId > 0) {
+            $procesar($equipo2InvId);
+        }
+
+        $stmtSel->close();
+        $stmtUpd->close();
+        $stmtDet->close();
+
+    } elseif (isset($_POST['productos']) && is_array($_POST['productos'])) {
+        // ====== BLOQUE LEGACY (cuando no usamos equipo1/equipo2) ======
+        foreach ($_POST['productos'] as $prod) {
+            $idProducto     = (int)($prod['id_producto'] ?? 0);
+            $imei1          = trim($prod['imei1'] ?? '');
+            $precioUnitario = (float)($prod['precio_unitario'] ?? 0);
+
+            if ($idProducto > 0) {
+                // detalle
+                $sqlDet = "INSERT INTO detalle_venta (id_venta, id_producto, imei1, precio_unitario)
+                           VALUES (?,?,?,?)";
+                $stmtDet = $conn->prepare($sqlDet);
                 $stmtDet->bind_param("iisd", $idVenta, $idProducto, $imei1, $precioUnitario);
                 $stmtDet->execute();
                 $stmtDet->close();
-            }
 
-            // Marcar como vendido en inventario (si está disponible)
-            $upd = $conn->prepare("UPDATE inventario
-                                   SET estatus='Vendido'
-                                   WHERE id_producto=? AND estatus='Disponible'
-                                   LIMIT 1");
-            if ($upd) {
-                $upd->bind_param("i", $idProducto);
+                // ❗ OJO: esto toma "cualquier" inventario disponible de ese producto
+                // Se mantiene por compatibilidad, pero no garantiza el IMEI exacto.
+                $upd = $conn->prepare("UPDATE inventario
+                                       SET estatus='Vendido'
+                                       WHERE id_producto=? AND id_sucursal=? AND estatus='Disponible'
+                                       LIMIT 1");
+                $upd->bind_param("ii", $idProducto, $idSucursal);
                 $upd->execute();
                 $upd->close();
             }
         }
     }
+
+    $conn->commit();
+
+} catch (Throwable $e) {
+    $conn->rollback();
+    // Mensaje claro para depurar; en producción podrías redirigir con msg de error.
+    die("Error al registrar detalle / inventario: " . $e->getMessage());
 }
 
 /* =========================

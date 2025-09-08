@@ -75,13 +75,23 @@ if (!empty($_GET['usuario'])) {
     $types   .= "i";
 }
 
-// Buscar (cliente, teléfono, TAG, IMEI)
+// Buscar (cliente, teléfono, TAG, IMEI1 o IMEI2)
 if (!empty($_GET['buscar'])) {
-    $where   .= " AND (v.nombre_cliente LIKE ? OR v.telefono_cliente LIKE ? OR v.tag LIKE ? 
-                   OR EXISTS (SELECT 1 FROM detalle_venta dv WHERE dv.id_venta=v.id AND dv.imei1 LIKE ?)) ";
+    $where   .= " AND (
+                     v.nombre_cliente LIKE ?
+                     OR v.telefono_cliente LIKE ?
+                     OR v.tag LIKE ?
+                     OR EXISTS (
+                          SELECT 1
+                          FROM detalle_venta dv
+                          INNER JOIN productos p2 ON p2.id = dv.id_producto
+                          WHERE dv.id_venta = v.id
+                            AND (dv.imei1 LIKE ? OR p2.imei2 LIKE ?)
+                     )
+                 ) ";
     $busqueda = "%".trim($_GET['buscar'])."%";
-    array_push($params, $busqueda, $busqueda, $busqueda, $busqueda);
-    $types   .= "ssss";
+    array_push($params, $busqueda, $busqueda, $busqueda, $busqueda, $busqueda);
+    $types   .= "sssss";
 }
 
 // =====================
@@ -107,10 +117,13 @@ $ventas = $stmt->get_result();
 $stmt->close();
 
 // =====================
-//   Consulta detalles
+//   Consulta detalles (ahora trae IMEI2)
 // =====================
 $sqlDetalle = "
-    SELECT dv.id_venta, p.marca, p.modelo, p.color, dv.imei1,
+    SELECT dv.id_venta,
+           p.marca, p.modelo, p.color,
+           dv.imei1,
+           p.imei2,
            dv.comision_regular, dv.comision_especial, dv.comision
     FROM detalle_venta dv
     INNER JOIN productos p ON dv.id_producto = p.id
@@ -141,7 +154,8 @@ echo "<thead>
             <th>Marca</th>
             <th>Modelo</th>
             <th>Color</th>
-            <th>IMEI</th>
+            <th>IMEI1</th>
+            <th>IMEI2</th>
             <th>Comisión Regular</th>
             <th>Comisión Especial</th>
             <th>Total Comisión Equipo</th>
@@ -166,7 +180,8 @@ while ($venta = $ventas->fetch_assoc()) {
             $marca   = htmlspecialchars($equipo['marca'] ?? '', ENT_QUOTES, 'UTF-8');
             $modelo  = htmlspecialchars($equipo['modelo'] ?? '', ENT_QUOTES, 'UTF-8');
             $color   = htmlspecialchars($equipo['color'] ?? '', ENT_QUOTES, 'UTF-8');
-            $imei    = $equipo['imei1'] ?? '';
+            $imei1   = $equipo['imei1'] ?? '';
+            $imei2   = $equipo['imei2'] ?? '';
             $creg    = (float)($equipo['comision_regular'] ?? 0);
             $cesp    = (float)($equipo['comision_especial'] ?? 0);
             $ctot    = (float)($equipo['comision'] ?? 0);
@@ -185,7 +200,8 @@ while ($venta = $ventas->fetch_assoc()) {
                     <td>{$marca}</td>
                     <td>{$modelo}</td>
                     <td>{$color}</td>
-                    <td>=\"".htmlspecialchars($imei, ENT_QUOTES, 'UTF-8')."\"</td>
+                    <td>=\"".htmlspecialchars($imei1, ENT_QUOTES, 'UTF-8')."\"</td>
+                    <td>=\"".htmlspecialchars($imei2, ENT_QUOTES, 'UTF-8')."\"</td>
                     <td>{$creg}</td>
                     <td>{$cesp}</td>
                     <td>{$ctot}</td>
@@ -203,7 +219,9 @@ while ($venta = $ventas->fetch_assoc()) {
                 <td>{$tipoVenta}</td>
                 <td>{$precio}</td>
                 <td>{$comisionV}</td>
-                <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+                <td></td><td></td><td></td>
+                <td></td><td></td>
+                <td></td><td></td><td></td>
               </tr>";
     }
 }
