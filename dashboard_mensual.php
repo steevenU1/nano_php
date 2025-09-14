@@ -575,20 +575,20 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr>
                   <th>Sucursal</th>
                   <th class="d-none d-md-table-cell">Tipo</th>
-                  <!-- Desktop -->
+                  <!-- Desktop (orden: Uds, $ Ventas, % Cumpl., Prep, Pos, Cuotas) -->
                   <th class="d-none d-md-table-cell">Unidades</th>
+                  <th class="d-none d-md-table-cell">Ventas $</th>
+                  <th class="d-none d-md-table-cell">% Cumplimiento</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
                   <th class="d-none d-md-table-cell">Cuota Unid.</th>
-                  <th class="d-none d-md-table-cell">Ventas $</th>
                   <th class="d-none d-md-table-cell">Cuota $</th>
-                  <th class="d-none d-md-table-cell">% Cumplimiento</th>
-                  <!-- Móvil abreviado -->
-                  <th class="d-table-cell d-md-none text-center">uds</th>
-                  <th class="d-table-cell d-md-none text-center">Pre</th>
-                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <!-- Móvil (orden: Uds, $, %, Prep, Pos) -->
+                  <th class="d-table-cell d-md-none text-center">Uds</th>
                   <th class="d-table-cell d-md-none text-center">$</th>
-                  <th class="d-table-cell d-md-none text-center">%C</th>
+                  <th class="d-table-cell d-md-none text-center">%</th>
+                  <th class="d-table-cell d-md-none text-center">Prep</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
                 </tr>
               </thead>
               <tbody>
@@ -601,18 +601,18 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['tipo']) ?></td>
                   <!-- Desktop -->
                   <td class="d-none d-md-table-cell"><?= (int)$s['unidades'] ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
+                  <td class="d-none d-md-table-cell"><?= round($s['cumplimiento'],1) ?>% <?= $estado ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['cuota_unidades'] ?></td>
-                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
                   <td class="d-none d-md-table-cell">$<?= number_format($s['cuota_monto'],2) ?></td>
-                  <td class="d-none d-md-table-cell"><?= round($s['cumplimiento'],1) ?>% <?= $estado ?></td>
                   <!-- Móvil -->
                   <td class="d-table-cell d-md-none text-center"><?= (int)$s['unidades'] ?></td>
-                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_prepago'] ?></td>
-                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_pospago'] ?></td>
                   <td class="d-table-cell d-md-none text-center">$<?= number_format($s['ventas'],0) ?></td>
                   <td class="d-table-cell d-md-none text-center"><?= round($s['cumplimiento'],1) ?>%</td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_prepago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_pospago'] ?></td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -639,20 +639,20 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr>
                   <th>Ejecutivo</th>
                   <th class="d-none d-md-table-cell">Sucursal</th>
-                  <!-- Desktop -->
+                  <!-- Desktop (Uds, $ Ventas, % Cumpl., Prep, Pos, Cuota, Progreso) -->
                   <th class="d-none d-md-table-cell">Unidades</th>
+                  <th class="d-none d-md-table-cell">Ventas $</th>
+                  <th class="d-none d-md-table-cell">% Cumpl. (Unid.)</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
-                  <th class="d-none d-md-table-cell">Ventas $</th>
                   <th class="d-none d-md-table-cell">Cuota Mes (u)</th>
-                  <th class="d-none d-md-table-cell">% Cumpl. (Unid.)</th>
                   <th class="d-none d-md-table-cell">Progreso</th>
-                  <!-- Móvil abreviado -->
-                  <th class="d-table-cell d-md-none text-center">uds</th>
-                  <th class="d-table-cell d-md-none text-center">Pre</th>
-                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <!-- Móvil (Uds, $, %, Prep, Pos) -->
+                  <th class="d-table-cell d-md-none text-center">Uds</th>
                   <th class="d-table-cell d-md-none text-center">$</th>
-                  <th class="d-table-cell d-md-none text-center">%C</th>
+                  <th class="d-table-cell d-md-none text-center">%</th>
+                  <th class="d-table-cell d-md-none text-center">Prep</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
                 </tr>
               </thead>
               <tbody>
@@ -667,11 +667,11 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($e['sucursal']) ?></td>
                   <!-- Desktop -->
                   <td class="d-none d-md-table-cell"><?= (int)$e['unidades'] ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($e['ventas'],2) ?></td>
+                  <td class="d-none d-md-table-cell"><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$e['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$e['sims_pospago'] ?></td>
-                  <td class="d-none d-md-table-cell">$<?= number_format($e['ventas'],2) ?></td>
                   <td class="d-none d-md-table-cell"><?= number_format($e['cuota_unidades'],2) ?></td>
-                  <td class="d-none d-md-table-cell"><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
                   <td class="d-none d-md-table-cell" style="min-width:160px">
                     <div class="progress">
                       <div class="progress-bar <?= $barClass ?>" role="progressbar"
@@ -682,10 +682,10 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                   </td>
                   <!-- Móvil -->
                   <td class="d-table-cell d-md-none text-center"><?= (int)$e['unidades'] ?></td>
-                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_prepago'] ?></td>
-                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_pospago'] ?></td>
                   <td class="d-table-cell d-md-none text-center">$<?= number_format($e['ventas'],0) ?></td>
                   <td class="d-table-cell d-md-none text-center"><?= $pct===null ? '–' : ($pctRound.'%') ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_prepago'] ?></td>
+                  <td class="d-table-cell d-md-none text-center"><?= (int)$e['sims_pospago'] ?></td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -712,16 +712,16 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <tr>
                   <th>Sucursal</th>
                   <th class="d-none d-md-table-cell">Tipo</th>
-                  <!-- Desktop -->
+                  <!-- Desktop (Uds, $ Ventas, Prep, Pos) -->
                   <th class="d-none d-md-table-cell">Unidades</th>
+                  <th class="d-none d-md-table-cell">Ventas $</th>
                   <th class="d-none d-md-table-cell">SIM Prepago</th>
                   <th class="d-none d-md-table-cell">SIM Pospago</th>
-                  <th class="d-none d-md-table-cell">Ventas $</th>
-                  <!-- Móvil -->
-                  <th class="d-table-cell d-md-none text-center">uds</th>
-                  <th class="d-table-cell d-md-none text-center">Pre</th>
-                  <th class="d-table-cell d-md-none text-center">Pos</th>
+                  <!-- Móvil (Uds, $, Prep, Pos) -->
+                  <th class="d-table-cell d-md-none text-center">Uds</th>
                   <th class="d-table-cell d-md-none text-center">$</th>
+                  <th class="d-table-cell d-md-none text-center">Prep</th>
+                  <th class="d-table-cell d-md-none text-center">Pos</th>
                 </tr>
               </thead>
               <tbody>
@@ -731,14 +731,14 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                   <td class="d-none d-md-table-cell"><?= htmlspecialchars($s['tipo']) ?></td>
                   <!-- Desktop -->
                   <td class="d-none d-md-table-cell"><?= (int)$s['unidades'] ?></td>
+                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_prepago'] ?></td>
                   <td class="d-none d-md-table-cell"><?= (int)$s['sims_pospago'] ?></td>
-                  <td class="d-none d-md-table-cell">$<?= number_format($s['ventas'],2) ?></td>
                   <!-- Móvil -->
                   <td class="d-table-cell d-md-none text-center"><?= (int)$s['unidades'] ?></td>
+                  <td class="d-table-cell d-md-none text-center">$<?= number_format($s['ventas'],0) ?></td>
                   <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_prepago'] ?></td>
                   <td class="d-table-cell d-md-none text-center"><?= (int)$s['sims_pospago'] ?></td>
-                  <td class="d-table-cell d-md-none text-center">$<?= number_format($s['ventas'],0) ?></td>
                 </tr>
                 <?php endforeach; ?>
               </tbody>
