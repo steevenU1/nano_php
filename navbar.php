@@ -142,8 +142,8 @@ function parentActive(array $children)
 
 // Grupos por sección (para resaltar el dropdown padre)
 $grpDashboard  = ['productividad_dia.php', 'dashboard_unificado.php', 'dashboard_mensual.php'];
-$grpVentasLog  = ['historial_ventas.php', 'historial_ventas_sims.php', 'historial_ventas_ma.php'];
-$grpVentas     = array_merge($grpVentasLog, ['nueva_venta.php', 'venta_sim_prepago.php', 'venta_sim_pospago.php', 'venta_master_admin.php']);
+$grpVentasLog  = ['historial_ventas.php', 'historial_ventas_sims.php', 'historial_ventas_ma.php', 'historial_payjoy_tc.php']; // NEW: PayJoy historial
+$grpVentas     = array_merge($grpVentasLog, ['nueva_venta.php', 'venta_sim_prepago.php', 'venta_sim_pospago.php', 'venta_master_admin.php', 'payjoy_tc_nueva.php']); // NEW: PayJoy nueva
 $grpInvLog     = ['inventario_global.php', 'inventario_historico.php'];
 $grpInv        = array_merge($grpInvLog, ['panel.php', 'inventario_subdistribuidor.php', 'inventario_resumen.php', 'inventario_central.php', 'inventario_retiros.php']);
 // 🔹 Incluimos traspaso_directo_ma.php para que el menú quede activo en esa vista
@@ -341,6 +341,7 @@ $nombreCorto = firstName($nombreUsuario);
               <li class="dropdown-header">Historiales</li>
               <li><a class="dropdown-item<?= isActive(['historial_ventas.php']) ?>" href="historial_ventas.php"><i class="bi bi-clock-history me-2"></i>Historial de ventas</a></li>
               <li><a class="dropdown-item<?= isActive(['historial_ventas_sims.php']) ?>" href="historial_ventas_sims.php"><i class="bi bi-sim me-2"></i>Historial ventas SIM</a></li>
+              <li><a class="dropdown-item<?= isActive(['historial_payjoy_tc.php']) ?>" href="historial_payjoy_tc.php"><i class="bi bi-credit-card-2-front me-2"></i>Historial TDC PayJoy</a></li> <!-- NEW: PayJoy Logistica -->
             <?php else: ?>
               <!-- Sección: Ventas -->
               <li class="dropdown-header">Ventas</li>
@@ -350,6 +351,7 @@ $nombreCorto = firstName($nombreUsuario);
               <?php if ($rolUsuario === 'Admin'): ?>
                 <li><a class="dropdown-item<?= isActive(['venta_master_admin.php']) ?>" href="venta_master_admin.php"><i class="bi bi-shield-lock me-2"></i>Venta Master Admin</a></li>
               <?php endif; ?>
+              <li><a class="dropdown-item<?= isActive(['payjoy_tc_nueva.php']) ?>" href="payjoy_tc_nueva.php"><i class="bi bi-credit-card me-2"></i>Venta TDC PayJoy</a></li> <!-- NEW: PayJoy venta -->
 
               <li><hr class="dropdown-divider"></li>
 
@@ -357,6 +359,7 @@ $nombreCorto = firstName($nombreUsuario);
               <li class="dropdown-header">Historiales</li>
               <li><a class="dropdown-item<?= isActive(['historial_ventas.php']) ?>" href="historial_ventas.php"><i class="bi bi-clock-history me-2"></i>Historial de ventas</a></li>
               <li><a class="dropdown-item<?= isActive(['historial_ventas_sims.php']) ?>" href="historial_ventas_sims.php"><i class="bi bi-list-check me-2"></i>Historial ventas SIM</a></li>
+              <li><a class="dropdown-item<?= isActive(['historial_payjoy_tc.php']) ?>" href="historial_payjoy_tc.php"><i class="bi bi-credit-card-2-front me-2"></i>Historial TDC PayJoy</a></li> <!-- NEW: PayJoy historial -->
               <?php if ($rolUsuario === 'Admin'): ?>
                 <li><a class="dropdown-item<?= isActive(['historial_ventas_ma.php']) ?>" href="historial_ventas_ma.php"><i class="bi bi-clock-history me-2"></i>Historial ventas MA</a></li>
               <?php endif; ?>
@@ -409,7 +412,7 @@ $nombreCorto = firstName($nombreUsuario);
         <?php endif; ?>
 
         <!-- TRASPASOS (habilitado para Ejecutivo, Gerente, Admin, Super) -->
-        <?php if (in_array($rolUsuario, ['Ejecutivo', 'Gerente', 'Admin', 'Super'])): ?>
+        <?php if (in_array($rolUsuario, ['Ejecutivo', 'Gerente,', 'Gerente', 'Admin', 'Super'])): ?>
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle<?= parentActive($grpTraspasos) ?>" href="#" role="button" data-bs-toggle="dropdown">
               <i class="bi bi-arrow-left-right me-1"></i>Traspasos
