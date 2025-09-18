@@ -97,7 +97,7 @@ $sql = "
 $res = $conn->query($sql);
 
 /* Pivot en PHP */
-$rows   = [];   // cada valor: ['marca','modelo','capacidad','sucs'=>[sid=>qty],'total']
+$rows   = [];   // ['marca','modelo','capacidad','sucs'=>[sid=>qty],'total']
 $sucSet = [];   // sucursales presentes en el resultado
 
 while($r = $res->fetch_assoc()){
@@ -132,7 +132,7 @@ if ($verSuc) {
   asort($useSuc, SORT_NATURAL | SORT_FLAG_CASE);
 }
 
-/* ===== Orden filas: por Total DESC, luego marca→modelo→capacidad ===== */
+/* Orden filas */
 uasort($rows, function($a, $b){
   $ta = (int)$a['total'];
   $tb = (int)$b['total'];
@@ -167,7 +167,6 @@ function shortSuc($name){
   $n = preg_replace('/\s{2,}/', ' ', $n);
   return ($n !== '') ? $n : $name;
 }
-/* Helpers para URLs de botones */
 function qs($merge){
   $base = $_GET;
   foreach($merge as $k=>$v){ if ($v===null){ unset($base[$k]); } else { $base[$k]=$v; } }
@@ -195,7 +194,6 @@ function qs($merge){
   .btn.secondary{background:#fff;color:#111;border-color:#cbd5e1}
   .btn.ghost{background:#eef2ff;color:#0b5ed7;border-color:#dbeafe}
 
-  /* Contenedor tabla: fallback; JS ajusta a viewport */
   .table-scroll{
     position:relative;
     height:65vh;        /* fallback si no corre JS */
@@ -212,22 +210,48 @@ function qs($merge){
   tbody td:first-child, tbody td:nth-child(2), tbody td:nth-child(3){text-align:left}
   .num{font-variant-numeric:tabular-nums}
 
+  /* Columnas fijas (izquierda) en desktop */
   .fixed{position:sticky;background:#fff}
   .fixed-1{left:0}
   .fixed-2{left:var(--left-col-2,120px)}
   .fixed-3{left:var(--left-col-3,300px)}
   .fixed-1, .fixed-2, .fixed-3{box-shadow:1px 0 0 0 #e5e7eb inset}
-
   thead th.fixed-1{z-index:var(--z-head-fixed-1)}
   thead th.fixed-2{z-index:var(--z-head-fixed-2)}
   thead th.fixed-3{z-index:var(--z-head-fixed-3)}
   tbody td.fixed{z-index:var(--z-body-fixed)}
   tfoot th.fixed{z-index:var(--z-body-fixed)}
 
-  .suc-th{ writing-mode:vertical-rl; transform: rotate(180deg); text-align:left; vertical-align:bottom; min-width:28px; padding:6px 4px; }
-  tbody tr:hover td, tbody tr:hover .fixed{background:#eef4ff !important}
+  /* ===== Encabezados en vertical (DESKTOP por defecto) ===== */
+  thead th{
+    writing-mode:vertical-rl;
+    transform: rotate(180deg);
+    text-align:left;
+    vertical-align:bottom;
+    min-width:24px;      /* más compacto */
+    padding:4px 2px;
+  }
+  .suc-th{ min-width:24px; padding:6px 4px; }
 
-  .total-th, .total-td{background:#fafafa;font-weight:600}
+  /* ===== Compactar columnas numéricas ===== */
+  th, td { width:auto; }
+  .num, .suc-col { width:1%; }     /* que encojan al mínimo */
+  .total-th { min-width:28px; }
+
+  /* ===== Total pegado a la DERECHA ===== */
+  .fixed-right{
+    position:sticky;
+    right:0;
+    background:#fff;
+    box-shadow:-1px 0 0 0 #e5e7eb inset;
+  }
+  thead th.fixed-right{ z-index:15; }
+  tbody td.fixed-right{ z-index:7; }
+  tfoot th.fixed-right{ z-index:7; background:#f6f7fb; }
+
+  tbody tr:hover td, tbody tr:hover .fixed, tbody tr:hover .fixed-right{background:#eef4ff !important}
+
+  .total-td{background:#fafafa;font-weight:600}
   tfoot th, tfoot td{background:#f6f7fb;font-weight:700;border-top:2px solid #e5e7eb}
   .muted{color:#64748b;font-size:12px}
 
@@ -257,6 +281,35 @@ function qs($merge){
 
   .spinner{display:inline-block; width:18px; height:18px; border:2px solid #cbd5e1; border-top-color:#2563eb; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle}
   .mini{font-size:13px}
+
+  /* ===== RESPONSIVE (MÓVIL) ===== */
+  @media (max-width: 768px){
+    .container{padding:0 8px}
+    .table-scroll{height:auto; max-height:none; overflow:auto}
+    table{white-space:normal}
+    th,td{padding:8px 8px}
+
+    /* Quitar sticky de header para evitar glitches */
+    thead th{ position:static !important; top:auto !important; z-index:auto !important; }
+
+    /* En móvil: encabezados horizontales... */
+    thead th{
+      writing-mode:horizontal-tb;
+      transform:none;
+      text-align:left;
+      min-width:auto;
+      padding:8px 6px;
+    }
+    /* ...excepto SUCURSALES que van VERTICALES */
+    thead th.suc-th{
+      writing-mode:vertical-rl !important;
+      transform: rotate(180deg) !important;
+      text-align:left !important;
+      vertical-align:bottom !important;
+      min-width:26px !important;
+      padding:6px 4px !important;
+    }
+  }
 </style>
 
 </head>
@@ -265,7 +318,6 @@ function qs($merge){
   <h2>Resumen de inventario</h2>
 
   <form class="filters" method="get">
-    <!-- preserva estado de vista al filtrar -->
     <input type="hidden" name="ver_suc" value="<?= (int)$verSuc ?>">
     <input type="hidden" name="ma" value="<?= $isMA ? 1 : 0 ?>">
 
@@ -293,7 +345,7 @@ function qs($merge){
       <label for="modelo">Modelo</label>
       <select name="modelo" id="modelo">
         <option value="">Todos</option>
-        <?php foreach($catModelos as $m): ?>  <!-- FIX: 'as', no 'como' -->
+        <?php foreach($catModelos as $m): ?>
           <option value="<?=h($m)?>" <?=($m===$fModelo)?'selected':''?>><?=h($m)?></option>
         <?php endforeach; ?>
       </select>
@@ -320,7 +372,6 @@ function qs($merge){
     </div>
     <?php endif; ?>
 
-    <!-- Botones de vista (derecha) -->
     <div class="group" style="margin-left:auto">
       <label>&nbsp;</label>
       <?php if ($verSuc): ?>
@@ -346,13 +397,13 @@ function qs($merge){
 
           <?php if ($verSuc): ?>
             <?php if (empty($useSuc)): ?>
-              <th class="suc-th">—</th>
+              <th class="suc-th suc-col">—</th>
             <?php else: foreach($useSuc as $sid=>$sNom): ?>
-              <th class="suc-th" title="<?=h($sNom)?>"><?=h(shortSuc($sNom))?></th>
+              <th class="suc-th suc-col" title="<?=h($sNom)?>"><?=h(shortSuc($sNom))?></th>
             <?php endforeach; endif; ?>
           <?php endif; ?>
 
-          <th class="total-th">Total</th>
+          <th class="total-th fixed-right">Total</th>
         </tr>
       </thead>
 
@@ -382,14 +433,14 @@ function qs($merge){
 
               <?php if ($verSuc): ?>
                 <?php if (empty($useSuc)): ?>
-                  <td class="num">0</td>
+                  <td class="num suc-col">0</td>
                 <?php else: foreach($useSuc as $sid=>$sNom):
                         $q = $row['sucs'][$sid] ?? 0; ?>
-                  <td class="num"><?= $q ?: '0' ?></td>
+                  <td class="num suc-col"><?= $q ?: '0' ?></td>
                 <?php endforeach; endif; ?>
               <?php endif; ?>
 
-              <td class="total-td num"><?= (int)$row['total'] ?></td>
+              <td class="total-td num fixed-right"><?= (int)$row['total'] ?></td>
             </tr>
             <!-- Fila detalle -->
             <tr class="detail-row" style="display:none">
@@ -411,13 +462,13 @@ function qs($merge){
 
           <?php if ($verSuc): ?>
             <?php if (empty($useSuc)): ?>
-              <th class="num">0</th>
+              <th class="num suc-col">0</th>
             <?php else: foreach($useSuc as $sid=>$sNom): ?>
-              <th class="num"><?= (int)$colTotals[$sid] ?></th>
+              <th class="num suc-col"><?= (int)$colTotals[$sid] ?></th>
             <?php endforeach; endif; ?>
           <?php endif; ?>
 
-          <th class="num"><?= (int)$grandTotal ?></th>
+          <th class="num fixed-right"><?= (int)$grandTotal ?></th>
         </tr>
       </tfoot>
     </table>
@@ -431,10 +482,55 @@ function qs($merge){
 </div>
 
 <script>
-/* Offsets para columnas fijas */
-function setStickyOffsets(){
+/* ===== Desactivar columnas fijas (izq + total derecha) en móvil y restaurar en desktop ===== */
+function stripFixedForMobile(){
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
   const tbl = document.getElementById('resumenTbl');
   if (!tbl) return;
+
+  const fixedNodes = tbl.querySelectorAll('.fixed-1, .fixed-2, .fixed-3, .fixed-right, td.fixed, th.fixed');
+
+  if (isMobile){
+    fixedNodes.forEach(el=>{
+      if (!el.dataset.origClass){
+        el.dataset.origClass = el.className; // guarda clases originales
+      }
+      el.classList.remove('fixed','fixed-1','fixed-2','fixed-3','fixed-right');
+      el.style.left = '';
+      el.style.right = '';
+      el.style.position = '';
+      el.style.zIndex = '';
+    });
+    document.querySelectorAll('thead th').forEach(th=>{
+      th.style.position = 'static';
+      th.style.top = 'auto';
+      th.style.zIndex = 'auto';
+    });
+  } else {
+    document.querySelectorAll('[data-orig-class]').forEach(el=>{
+      el.className = el.dataset.origClass;
+    });
+    fixedNodes.forEach(el=>{
+      if (el.dataset.origClass){ el.className = el.dataset.origClass; }
+      el.style.left = '';
+      el.style.right = '';
+      el.style.position = '';
+      el.style.zIndex = '';
+    });
+    document.querySelectorAll('thead th').forEach(th=>{
+      th.style.position = '';
+      th.style.top = '';
+      th.style.zIndex = '';
+    });
+    setStickyOffsets();
+  }
+}
+
+/* Offsets para columnas fijas (izquierda) — solo desktop */
+function setStickyOffsets(){
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  const tbl = document.getElementById('resumenTbl');
+  if (!tbl || isMobile) return;
   const c1 = tbl.querySelector('thead .fixed-1');
   const c2 = tbl.querySelector('thead .fixed-2');
   if (!c1 || !c2) return;
@@ -444,35 +540,31 @@ function setStickyOffsets(){
   tbl.style.setProperty('--left-col-3', Math.round(w1 + w2) + 'px');
 }
 
-/* Altura dinámica: ocupa todo el alto disponible de la ventana */
+/* Altura dinámica del contenedor (desktop/móvil) */
 function setTableViewportHeight(){
   const wrap = document.getElementById('tblWrap');
   if (!wrap) return;
-
   const rectTop = wrap.getBoundingClientRect().top;
   const vh = window.innerHeight || document.documentElement.clientHeight;
   const bottomPadding = 12;
   const h = Math.max(320, Math.floor(vh - rectTop - bottomPadding));
-
   wrap.style.height = h + 'px';
   wrap.style.maxHeight = h + 'px';
 }
 
-/* Bind de eventos */
+/* Bind */
 function reflow(){
+  stripFixedForMobile();
   setTableViewportHeight();
   setStickyOffsets();
 }
 window.addEventListener('load', reflow);
 window.addEventListener('resize', reflow);
-window.addEventListener('scroll', reflow, { passive: true });
-
+window.addEventListener('scroll', setTableViewportHeight, { passive: true });
 const wrap = document.getElementById('tblWrap');
-if (wrap) {
-  new ResizeObserver(reflow).observe(wrap);
-}
+if (wrap) { new ResizeObserver(reflow).observe(wrap); }
 
-/* Toggle detalle por modelo (carga AJAX y cachea en la fila) */
+/* Toggle detalle por modelo (AJAX) */
 document.querySelectorAll('#resumenTbl tbody tr.item-row').forEach(function(row){
   const btn = row.querySelector('.cell-modelo');
   const detailRow = row.nextElementSibling;

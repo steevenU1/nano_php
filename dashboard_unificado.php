@@ -28,7 +28,8 @@ function obtenerSemanaPorIndice($offset = 0) {
 
 /* Quita prefijo NANORED del nombre de sucursal solo para visualizar */
 function limpiarNombreSucursal(string $n): string {
-    $t = preg_replace('/^\s*NANORED\s*/i', '', $n);
+    // Elimina "NANORED" o "Bait" al inicio, con espacios y sin importar may/min
+    $t = preg_replace('/^\s*(?:NANORED|Bait)\s*/i', '', $n);
     return trim($t);
 }
 
@@ -106,6 +107,13 @@ $stmt->execute();
 $resEjecutivos = $stmt->get_result();
 
 $rankingEjecutivos = [];
+// Totales Ejecutivos
+$totalUnidadesEj = 0;
+$totalVentasEj   = 0.0;
+$totalCuotaEj    = 0;
+$totalPrepEj     = 0;
+$totalPosEj      = 0;
+
 while ($row = $resEjecutivos->fetch_assoc()) {
     $row['unidades']        = (int)$row['unidades'];
     $row['total_ventas']    = (float)$row['total_ventas'];
@@ -114,8 +122,16 @@ while ($row = $resEjecutivos->fetch_assoc()) {
     $row['sims_prepago']    = (int)$row['sims_prepago'];
     $row['sims_pospago']    = (int)$row['sims_pospago'];
     $rankingEjecutivos[]    = $row;
+
+    // acumular
+    $totalUnidadesEj += $row['unidades'];
+    $totalVentasEj   += $row['total_ventas'];
+    $totalCuotaEj    += $row['cuota_ejecutivo'];
+    $totalPrepEj     += $row['sims_prepago'];
+    $totalPosEj      += $row['sims_pospago'];
 }
 $top3Ejecutivos = array_slice(array_column($rankingEjecutivos, 'id'), 0, 3);
+$porcentajeGlobalEj = $totalCuotaEj > 0 ? ($totalUnidadesEj / $totalCuotaEj) * 100 : 0;
 
 /* ==============================
    Sucursales (Propias) + SIMs
@@ -186,6 +202,10 @@ $sucursales = [];
 $totalUnidadesPropias = 0;
 $totalVentasPropias   = 0;
 $totalCuotaPropias    = 0;
+// nuevos totales de SIMs
+$totalPrepPropias     = 0;
+$totalPosPropias      = 0;
+
 while ($row = $resSucursalesPropias->fetch_assoc()) {
     $row['sucursal']      = limpiarNombreSucursal($row['sucursal']);
     $row['unidades']      = (int)$row['unidades'];
@@ -199,6 +219,8 @@ while ($row = $resSucursalesPropias->fetch_assoc()) {
     $totalUnidadesPropias += $row['unidades'];
     $totalVentasPropias   += $row['total_ventas'];
     $totalCuotaPropias    += $row['cuota_semanal'];
+    $totalPrepPropias     += $row['sims_prepago'];
+    $totalPosPropias      += $row['sims_pospago'];
 }
 $porcentajeGlobalPropias = $totalCuotaPropias>0 ? ($totalVentasPropias/$totalCuotaPropias)*100 : 0;
 
@@ -269,6 +291,9 @@ $resSucursalesMA = $stmtMA->get_result();
 $sucursalesMA = [];
 $totalUnidadesMA = 0;
 $totalVentasMA   = 0;
+$totalPrepMA     = 0;
+$totalPosMA      = 0;
+
 while ($row = $resSucursalesMA->fetch_assoc()) {
     $row['sucursal']      = limpiarNombreSucursal($row['sucursal']);
     $row['unidades']      = (int)$row['unidades'];
@@ -278,6 +303,8 @@ while ($row = $resSucursalesMA->fetch_assoc()) {
     $sucursalesMA[]       = $row;
     $totalUnidadesMA     += $row['unidades'];
     $totalVentasMA       += $row['total_ventas'];
+    $totalPrepMA         += $row['sims_prepago'];
+    $totalPosMA          += $row['sims_pospago'];
 }
 
 /* ==========================================================
@@ -443,6 +470,7 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
         backdrop-filter: blur(4px);
       }
       .btn-download svg{ width:16px; height:16px; vertical-align: -3px;}
+      tfoot tr { font-weight: 700; }
     </style>
 </head>
 <body class="bg-light">
@@ -477,7 +505,7 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <div class="card-body">
                     <h5 class="mb-2"><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
                     <div class="small text-muted mb-2">
-                        Unidades: <?= $totalUnidadesPropias ?> · Ventas: $<?= number_format($totalVentasPropias,2) ?> · Cuota: $<?= number_format($totalCuotaPropias,2) ?>
+                        Unidades: <?= $totalUnidadesPropias ?> · Ventas: $<?= number_format($totalVentasPropias,2) ?> · Cuota: $<?= number_format($totalCuotaPropias,2) ?> · Prep: <?= $totalPrepPropias ?> · Pos: <?= $totalPosPropias ?>
                     </div>
                     <div class="progress">
                         <div class="progress-bar <?= $porcentajeGlobalPropias>=100?'bg-success':($porcentajeGlobalPropias>=60?'bg-warning':'bg-danger') ?>"
@@ -493,16 +521,16 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                 <div class="card-header bg-secondary text-white">Master Admin</div>
                 <div class="card-body">
                     <h6 class="mb-2">Sin cuota</h6>
-                    <div class="small text-muted">Unidades: <?= $totalUnidadesMA ?> · Ventas: $<?= number_format($totalVentasMA,2) ?></div>
+                    <div class="small text-muted">Unidades: <?= $totalUnidadesMA ?> · Ventas: $<?= number_format($totalVentasMA,2) ?> · Prep: <?= $totalPrepMA ?> · Pos: <?= $totalPosMA ?></div>
                 </div>
             </div>
         </div>
         <div class="col-6 col-md-4">
             <div class="card shadow text-center h-100">
-                <div class="card-header bg-primary text-white">🌐 Global (Propias)</div>
+                <div class="card-header bg-primary text-white">🌐 Global (Ejecutivos)</div>
                 <div class="card-body">
-                    <h5 class="mb-2"><?= number_format($porcentajeGlobalPropias,1) ?>% Cumplimiento</h5>
-                    <div class="small text-muted">Unidades: <?= $totalUnidadesPropias ?> · Ventas: $<?= number_format($totalVentasPropias,2) ?> · Cuota: $<?= number_format($totalCuotaPropias,2) ?></div>
+                    <h5 class="mb-2"><?= number_format($porcentajeGlobalEj,1) ?>% Cumplimiento</h5>
+                    <div class="small text-muted">Uds: <?= $totalUnidadesEj ?> · Ventas: $<?= number_format($totalVentasEj,2) ?> · Cuota (u): <?= number_format($totalCuotaEj) ?> · Prep: <?= $totalPrepEj ?> · Pos: <?= $totalPosEj ?></div>
                 </div>
             </div>
         </div>
@@ -619,6 +647,39 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                           </tr>
                           <?php endforeach;?>
                         </tbody>
+
+                        <!-- ====== TOTALES SUCURSALES PROPIAS ====== -->
+                        <?php
+                          $cumplTotSuc = $totalCuotaPropias > 0 ? round(($totalVentasPropias / $totalCuotaPropias) * 100, 1) : 0;
+                          $estadoTotSuc = $cumplTotSuc>=100?"✅":($cumplTotSuc>=60?"⚠️":"❌");
+                        ?>
+                        <tfoot>
+                          <tr class="table-dark">
+                            <td>TOTALES</td>
+                            <td class="d-none d-md-table-cell">—</td>
+
+                            <!-- Desktop -->
+                            <td class="d-none d-md-table-cell"><?= (int)$totalUnidadesPropias ?></td>
+                            <td class="d-none d-md-table-cell">$<?= number_format($totalVentasPropias,2) ?></td>
+                            <td class="d-none d-md-table-cell"><?= $cumplTotSuc ?>% <?= $estadoTotSuc ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$totalPrepPropias ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$totalPosPropias ?></td>
+                            <td class="d-none d-md-table-cell">$<?= number_format($totalCuotaPropias,2) ?></td>
+                            <td class="d-none d-md-table-cell">
+                              <div class="progress">
+                                <div class="progress-bar <?= $cumplTotSuc>=100?'bg-success':($cumplTotSuc>=60?'bg-warning':'bg-danger') ?>"
+                                     style="width:<?= min(100,$cumplTotSuc) ?>%"><?= $cumplTotSuc ?>%</div>
+                              </div>
+                            </td>
+
+                            <!-- Móvil -->
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalUnidadesPropias ?></td>
+                            <td class="d-table-cell d-md-none text-center">$<?= number_format($totalVentasPropias,0) ?></td>
+                            <td class="d-table-cell d-md-none text-center"><?= $cumplTotSuc ?>%</td>
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalPrepPropias ?></td>
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalPosPropias ?></td>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                 </div>
@@ -698,6 +759,40 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                         </tr>
                         <?php endforeach;?>
                       </tbody>
+
+                      <!-- ====== TOTALES EJECUTIVOS ====== -->
+                      <?php
+                        $cumplTotEj = $totalCuotaEj > 0 ? round(($totalUnidadesEj / $totalCuotaEj) * 100, 1) : 0;
+                        $estadoTotEj = $cumplTotEj>=100?"✅":($cumplTotEj>=60?"⚠️":"❌");
+                      ?>
+                      <tfoot>
+                        <tr class="table-dark">
+                          <td>TOTALES</td>
+                          <td class="d-none d-md-table-cell">—</td>
+                          <td class="d-none d-md-table-cell">—</td>
+
+                          <!-- Desktop -->
+                          <td class="d-none d-md-table-cell"><?= (int)$totalUnidadesEj ?></td>
+                          <td class="d-none d-md-table-cell">$<?= number_format($totalVentasEj,2) ?></td>
+                          <td class="d-none d-md-table-cell"><?= $cumplTotEj ?>% <?= $estadoTotEj ?></td>
+                          <td class="d-none d-md-table-cell"><?= (int)$totalPrepEj ?></td>
+                          <td class="d-none d-md-table-cell"><?= (int)$totalPosEj ?></td>
+                          <td class="d-none d-md-table-cell"><?= (int)$totalCuotaEj ?></td>
+                          <td class="d-none d-md-table-cell">
+                            <div class="progress">
+                              <div class="progress-bar <?= $cumplTotEj>=100?'bg-success':($cumplTotEj>=60?'bg-warning':'bg-danger') ?>"
+                                   style="width:<?= min(100,$cumplTotEj) ?>%"><?= $cumplTotEj ?>%</div>
+                            </div>
+                          </td>
+
+                          <!-- Móvil -->
+                          <td class="d-table-cell d-md-none text-center"><?= (int)$totalUnidadesEj ?></td>
+                          <td class="d-table-cell d-md-none text-center">$<?= number_format($totalVentasEj,0) ?></td>
+                          <td class="d-table-cell d-md-none text-center"><?= $cumplTotEj ?>%</td>
+                          <td class="d-table-cell d-md-none text-center"><?= (int)$totalPrepEj ?></td>
+                          <td class="d-table-cell d-md-none text-center"><?= (int)$totalPosEj ?></td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </div>
@@ -755,6 +850,26 @@ if ($otrasVal>0) { $labelsGraf[]='Otras'; $dataGraf[]=round($otrasVal,2); }
                             </tr>
                             <?php endforeach;?>
                         </tbody>
+
+                        <!-- ====== TOTALES MASTER ADMIN ====== -->
+                        <tfoot>
+                          <tr class="table-dark">
+                            <td>TOTALES</td>
+                            <td class="d-none d-md-table-cell">—</td>
+
+                            <!-- Desktop -->
+                            <td class="d-none d-md-table-cell"><?= (int)$totalUnidadesMA ?></td>
+                            <td class="d-none d-md-table-cell">$<?= number_format($totalVentasMA,2) ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$totalPrepMA ?></td>
+                            <td class="d-none d-md-table-cell"><?= (int)$totalPosMA ?></td>
+
+                            <!-- Móvil -->
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalUnidadesMA ?></td>
+                            <td class="d-table-cell d-md-none text-center">$<?= number_format($totalVentasMA,0) ?></td>
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalPrepMA ?></td>
+                            <td class="d-table-cell d-md-none text-center"><?= (int)$totalPosMA ?></td>
+                          </tr>
+                        </tfoot>
                     </table>
                   </div>
                 </div>
