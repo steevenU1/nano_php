@@ -20,7 +20,7 @@ include 'db.php';
    - También puedes pasar ?luhn=0/1 para override temporal sin tocar código
 ============================ */
 if (!defined('IMEI_LUHN_ENFORCE')) {
-  define('IMEI_LUHN_ENFORCE', false); // <- por ahora desactivado
+  define('IMEI_LUHN_ENFORCE', true); // <- por ahora desactivado
 }
 $ENFORCE_LUHN = (bool) IMEI_LUHN_ENFORCE;
 if (isset($_GET['luhn'])) {
