@@ -1,46 +1,38 @@
 <?php
-// compras_guardar.php
-// Guarda encabezado y renglones por MODELO del catálogo + otros cargos + pago contado opcional
-
-// Carga candado si existe; si no, define un no-op
-$__candado = __DIR__ . '/candado_captura.php';
-if (file_exists($__candado)) {
-  require_once $__candado;
+// compras_guardar.php (Nano) — Guarda encabezado + renglones por MODELO + cargos + pago contado opcional
+// Candado opcional (no truena si no existe)
+$candado = __DIR__ . '/candado_captura.php';
+if (is_file($candado)) {
+  require_once $candado;
   if (function_exists('abortar_si_captura_bloqueada')) {
-    abortar_si_captura_bloqueada();
-  }
-} else {
-  // Fallback sin bloqueo
-  if (!function_exists('abortar_si_captura_bloqueada')) {
-    function abortar_si_captura_bloqueada(): void { /* no-op */ }
+    abortar_si_captura_bloqueada(); // bloquea POST si corresponde
   }
 }
 
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
-require_once __DIR__ . '/db.php';
+require_once __DIR__.'/db.php';
+
 $ID_USUARIO = (int)($_SESSION['id_usuario'] ?? 0);
 
-/* =========================
-   Encabezado (POST)
-========================= */
+// ---------- Encabezado (POST) ----------
 $id_proveedor      = (int)($_POST['id_proveedor'] ?? 0);
 $num_factura       = trim($_POST['num_factura'] ?? '');
 $id_sucursal       = (int)($_POST['id_sucursal'] ?? 0);
 $fecha_factura     = $_POST['fecha_factura'] ?? date('Y-m-d');
 $fecha_venc        = $_POST['fecha_vencimiento'] ?? null;
-$condicion_pago    = $_POST['condicion_pago'] ?? 'Contado'; // 'Contado' | 'Crédito'
+$condicion_pago    = $_POST['condicion_pago'] ?? 'Contado'; // Contado | Crédito
 $dias_vencimiento  = isset($_POST['dias_vencimiento']) && $_POST['dias_vencimiento'] !== ''
                      ? (int)$_POST['dias_vencimiento'] : null;
-$notas             = trim($_POST['notas'] ?? '');
+$notas             = substr(trim($_POST['notas'] ?? ''), 0, 2000);
 
+// Validaciones mínimas
 if ($id_proveedor<=0 || $num_factura==='' || $id_sucursal<=0) {
+  http_response_code(400);
   die("Parámetros inválidos.");
 }
 
-/* =========================
-   Utilidades fechas
-========================= */
+// Utilidades fechas
 function is_valid_date($s){
   if (!$s) return false;
   $d = DateTime::createFromFormat('Y-m-d', $s);
@@ -49,7 +41,7 @@ function is_valid_date($s){
 function add_days($base, $days){
   $d = DateTime::createFromFormat('Y-m-d', $base);
   if (!$d) return null;
-  $d->modify('+' . (int)$days . ' days');
+  $d->modify('+'.(int)$days.' days');
   return $d->format('Y-m-d');
 }
 function diff_days($from, $to){
@@ -59,20 +51,16 @@ function diff_days($from, $to){
   return (int)$df->diff($dt)->format('%r%a');
 }
 
-/* =========================
-   Lógica de vencimiento
-========================= */
+// Lógica de vencimiento
 if ($condicion_pago === 'Contado') {
   if (!is_valid_date($fecha_factura)) $fecha_factura = date('Y-m-d');
   $fecha_venc = $fecha_factura;
   $dias_vencimiento = 0;
 } else {
   if (!is_valid_date($fecha_factura)) $fecha_factura = date('Y-m-d');
-
   if ($dias_vencimiento !== null) {
     if ($dias_vencimiento < 0) $dias_vencimiento = 0;
-    $fv = add_days($fecha_factura, $dias_vencimiento);
-    $fecha_venc = $fv ?: null;
+    $fecha_venc = add_days($fecha_factura, $dias_vencimiento);
   } elseif ($fecha_venc && is_valid_date($fecha_venc)) {
     $d = diff_days($fecha_factura, $fecha_venc);
     if ($d !== null && $d >= 0) {
@@ -87,140 +75,109 @@ if ($condicion_pago === 'Contado') {
   }
 }
 
-/* =========================
-   Detalle (indexados por fila)
-========================= */
-$id_modelo   = $_POST['id_modelo'] ?? [];         // [idx] => id
-$mm_text     = $_POST['mm_text']   ?? [];         // [idx] => texto del buscador
-$color       = $_POST['color'] ?? [];             // [idx] => str
-$ram         = $_POST['ram'] ?? [];               // [idx] => str
-$capacidad   = $_POST['capacidad'] ?? [];         // [idx] => str
-$cantidad    = $_POST['cantidad'] ?? [];          // [idx] => int
-$precio      = $_POST['precio_unitario'] ?? [];   // [idx] => float
-$iva_pct     = $_POST['iva_porcentaje'] ?? [];    // [idx] => float
-$requiereMap = $_POST['requiere_imei'] ?? [];     // [idx] => "0" | "1"
-// Nota: ya no abortamos si $id_modelo está vacío; puede haber renglones libres (requiere_imei=0).
+// ---------- Detalle ----------
+$id_modelo   = $_POST['id_modelo'] ?? [];
+$color       = $_POST['color'] ?? [];
+$ram         = $_POST['ram'] ?? [];
+$capacidad   = $_POST['capacidad'] ?? [];
+$cantidad    = $_POST['cantidad'] ?? [];
+$precio      = $_POST['precio_unitario'] ?? [];   // sin IVA
+$iva_pct     = $_POST['iva_porcentaje'] ?? [];
+$requiereMap = $_POST['requiere_imei'] ?? [];
 
-/* =========================
-   Otros cargos
-========================= */
-$extra_desc           = $_POST['extra_desc'] ?? [];           
-$extra_monto          = $_POST['extra_monto'] ?? [];          
-$extra_iva_porcentaje = $_POST['extra_iva_porcentaje'] ?? []; 
+// Descuento por renglón (opcionales)
+$costo_dto     = $_POST['costo_dto']     ?? [];   // float | ''
+$costo_dto_iva = $_POST['costo_dto_iva'] ?? [];   // float | ''
 
-/* =========================
-   Resolver modelo (case-insensitive)
-========================= */
-function resolver_modelo(mysqli $conn, $txt){
-  $txt = trim((string)$txt);
-  if ($txt==='') return 0;
+if (empty($id_modelo)) { http_response_code(400); die("Debes incluir al menos un renglón."); }
 
-  // Por código de producto (case-insensitive)
-  $q1 = $conn->prepare("SELECT id FROM catalogo_modelos WHERE activo=1 AND UPPER(codigo_producto)=UPPER(?) LIMIT 1");
-  $q1->bind_param('s',$txt);
-  if ($q1->execute() && ($r=$q1->get_result()) && $r->num_rows) { $id = (int)$r->fetch_assoc()['id']; $q1->close(); return $id; }
-  $q1->close();
+// ---------- Otros cargos (opcional) ----------
+$extra_desc            = $_POST['extra_desc']            ?? [];
+$extra_monto           = $_POST['extra_monto']           ?? [];
+$extra_iva_porcentaje  = $_POST['extra_iva_porcentaje']  ?? [];
 
-  // Por "marca modelo" exacto (fallback)
-  $q2 = $conn->prepare("SELECT id FROM catalogo_modelos WHERE activo=1 AND CONCAT(marca,' ',modelo)=? LIMIT 1");
-  $q2->bind_param('s',$txt);
-  if ($q2->execute() && ($r=$q2->get_result()) && $r->num_rows) { $id = (int)$r->fetch_assoc()['id']; $q2->close(); return $id; }
-  $q2->close();
-
-  return 0;
-}
-
-/* =========================
-   Construcción de renglones
-========================= */
 $subtotal = 0.0; $iva = 0.0; $total = 0.0;
 $rows = [];
 
-// unimos índices presentes en cualquiera de los arrays de fila
-$indices = array_unique(array_map('strval', array_merge(
-  array_keys($id_modelo), array_keys($cantidad), array_keys($precio), array_keys($requiereMap)
-)));
+// Construcción de renglones y cálculo de totales
+foreach ($id_modelo as $idx => $idmRaw) {
+  $idm = (int)$idmRaw;
+  if ($idm<=0) continue;
 
-foreach ($indices as $idx) {
-  $req = (int)($requiereMap[$idx] ?? 1);
-  $idm = (int)($id_modelo[$idx] ?? 0);
-
-  $txtBuscado = trim((string)($mm_text[$idx] ?? ''));
-  if ($req === 1 && $idm <= 0 && $txtBuscado !== '') {
-    $idm = resolver_modelo($conn, $txtBuscado);
-  }
+  // Snapshot del catálogo
+  $st = $conn->prepare("SELECT marca, modelo, codigo_producto FROM catalogo_modelos WHERE id=? AND activo=1");
+  $st->bind_param("i", $idm);
+  $st->execute();
+  $st->bind_result($marca, $modelo, $codigoCat);
+  $ok = $st->fetch(); $st->close();
+  if (!$ok) continue;
 
   $col = substr(trim($color[$idx] ?? ''), 0, 40);
-  $ramv= substr(trim($ram[$idx] ?? ''),    0, 40);
+  $ramv= substr(trim($ram[$idx] ?? ''),    0, 50);
   $cap = substr(trim($capacidad[$idx] ?? ''), 0, 40);
   $qty = max(0, (int)($cantidad[$idx] ?? 0));
-  $pu  = max(0, (float)($precio[$idx] ?? 0));
-  $ivp = max(0, (float)($iva_pct[$idx] ?? 0));
+  $pu  = max(0, (float)($precio[$idx] ?? 0));     // sin IVA
+  $ivp = max(0, (float)($iva_pct[$idx] ?? 0));    // %
+  $req = (int)($requiereMap[$idx] ?? 1) === 1 ? 1 : 0;
 
-  // Validaciones numéricas básicas
-  if ($qty <= 0 || $pu <= 0) { continue; }
+  if ($marca==='' || $modelo==='' || $col==='' || $cap==='' || $qty<=0 || $pu<=0) continue;
 
-  // Datos de catálogo solo si hay id_modelo
-  $marca = ''; $modelo = ''; $codigoCat = null;
-  if ($idm > 0) {
-    $st = $conn->prepare("SELECT marca, modelo, codigo_producto FROM catalogo_modelos WHERE id=? AND activo=1");
-    $st->bind_param("i", $idm);
-    $st->execute();
-    $st->bind_result($marca, $modelo, $codigoCat);
-    $ok = $st->fetch(); 
-    $st->close();
-    if (!$ok) { $idm = 0; $marca=''; $modelo=''; $codigoCat=null; }
+  // Normalización de DTOs (por unidad)
+  $dto    = isset($costo_dto[$idx])     && $costo_dto[$idx]     !== '' ? (float)$costo_dto[$idx]     : null;
+  $dtoIva = isset($costo_dto_iva[$idx]) && $costo_dto_iva[$idx] !== '' ? (float)$costo_dto_iva[$idx] : null;
+
+  if ($dto !== null && ($dtoIva === null || $dtoIva <= 0)) {
+    $dtoIva = round($dto * (1 + ($ivp/100)), 2);
+  } elseif (($dto === null || $dto <= 0) && $dtoIva !== null && $dtoIva > 0) {
+    $dto = round($dtoIva / (1 + ($ivp/100)), 2);
   }
 
-  // Si requiere IMEI y no hay modelo válido, descartar
-  if ($req === 1 && $idm <= 0) { continue; }
-
-  $descripcion = '';
-  if ($req === 0) {
-    // Ítem libre / accesorio: se permite sin modelo; usa mm_text como descripción
-    $descripcion = ($txtBuscado !== '') ? $txtBuscado : 'Ítem libre';
-  }
-
-  $rsub = round($qty * $pu, 2);
-  $riva = round($rsub * ($ivp/100.0), 2);
-  $rtot = round($rsub + $riva, 2);
+  // Totales del renglón (contables, sin aplicar DTO a estos totales)
+  $rsub = $qty * $pu;
+  $riva = $rsub * ($ivp/100.0);
+  $rtot = $rsub + $riva;
 
   $subtotal += $rsub; $iva += $riva; $total += $rtot;
 
   $rows[] = [
-    'id_modelo'=>$idm, 'marca'=>$marca, 'modelo'=>$modelo,
-    'color'=>$col, 'ram'=>$ramv, 'capacidad'=>$cap,
-    'cantidad'=>$qty, 'precio_unitario'=>$pu, 'iva_porcentaje'=>$ivp,
-    'subtotal'=>$rsub, 'iva'=>$riva, 'total'=>$rtot,
-    'requiere_imei'=>$req,
-    'codigo_producto'=>$codigoCat,
-    'descripcion'=>$descripcion  // solo para ítems libres; vacío para catálogo
+    'id_modelo'       => $idm,
+    'marca'           => $marca,
+    'modelo'          => $modelo,
+    'color'           => $col,
+    'ram'             => $ramv,
+    'capacidad'       => $cap,
+    'cantidad'        => $qty,
+    'precio_unitario' => $pu,
+    'iva_porcentaje'  => $ivp,
+    'subtotal'        => $rsub,
+    'iva'             => $riva,
+    'total'           => $rtot,
+    'requiere_imei'   => $req,
+    'codigo_producto' => $codigoCat,
+    'costo_dto'       => $dto,       // nullable
+    'costo_dto_iva'   => $dtoIva     // nullable
   ];
 }
 
-if (empty($rows)) { die("Debes incluir al menos un renglón válido."); }
+if (empty($rows)) { http_response_code(400); die("Debes incluir al menos un renglón válido."); }
 
-/* =========================
-   Extras
-========================= */
+// Extras
 $extraSub = 0.0; $extraIVA = 0.0;
 if (!empty($extra_desc) && is_array($extra_desc)) {
   foreach ($extra_desc as $i => $descRaw) {
-    $desc = trim((string)$descRaw);
+    $desc  = trim((string)$descRaw);
     $monto = isset($extra_monto[$i]) ? (float)$extra_monto[$i] : 0.0;
     $ivaP  = isset($extra_iva_porcentaje[$i]) ? (float)$extra_iva_porcentaje[$i] : 0.0;
-    if ($desc === '' || $monto <= 0) { continue; }
+    if ($desc === '' || $monto <= 0) continue;
     $extraSub += $monto;
-    $extraIVA += round($monto * ($ivaP/100.0), 2);
+    $extraIVA += $monto * ($ivaP/100.0);
   }
 }
-$subtotal = round($subtotal + $extraSub, 2);
-$iva      = round($iva + $extraIVA, 2);
-$total    = round($subtotal + $iva, 2);
+$subtotal += $extraSub;
+$iva      += $extraIVA;
+$total     = $subtotal + $iva; // robusto
 
-/* =========================
-   Transacción
-========================= */
+// ---------- Transacción ----------
 $conn->begin_transaction();
 try {
   // Encabezado
@@ -230,7 +187,7 @@ try {
              subtotal, iva, total, estatus, notas, creado_por)
            VALUES (?,?,?,?,?,?,?,?,?,?,'Pendiente',?,?)";
   $stmtC = $conn->prepare($sqlC);
-  if (!$stmtC) { throw new Exception("Prepare compras: ".$conn->error); }
+  if (!$stmtC) throw new Exception("Prepare compras: ".$conn->error);
 
   $stmtC->bind_param(
     'siisssidddsi',
@@ -247,24 +204,27 @@ try {
     $notas,
     $ID_USUARIO
   );
-
-  if (!$stmtC->execute()) { throw new Exception("Insert compras: ".$stmtC->error); }
+  if (!$stmtC->execute()) throw new Exception("Insert compras: ".$stmtC->error);
   $id_compra = $stmtC->insert_id;
   $stmtC->close();
 
-  // Detalle (ahora con descripcion como parámetro)
+  // Detalle: permitir NULL en costo_dto y costo_dto_iva (se mandan como strings y NULLIF los convierte a NULL)
   $sqlD = "INSERT INTO compras_detalle
             (id_compra, id_modelo, marca, modelo, color, ram, capacidad, requiere_imei, descripcion,
-             cantidad, precio_unitario, iva_porcentaje, subtotal, iva, total)
+             cantidad, precio_unitario, iva_porcentaje, subtotal, iva, total, costo_dto, costo_dto_iva)
            VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?,
+             NULLIF(?, ''), NULLIF(?, ''))";
   $stmtD = $conn->prepare($sqlD);
-  if (!$stmtD) { throw new Exception("Prepare detalle: ".$conn->error); }
+  if (!$stmtD) throw new Exception("Prepare detalle: ".$conn->error);
 
-  // Tipos: i i s s s s s i s i d d d d d
-  $stmtD_types = 'iisssssisiddddd';
+  // Tipos: i i s s s s s i i d d d d d s s
+  $stmtD_types = 'iisssssiidddddss';
+
   foreach ($rows as $r) {
-    $desc = (string)($r['descripcion'] ?? '');
+    $dtoStr    = $r['costo_dto']     === null ? '' : number_format((float)$r['costo_dto'], 2, '.', '');
+    $dtoIvaStr = $r['costo_dto_iva'] === null ? '' : number_format((float)$r['costo_dto_iva'], 2, '.', '');
+
     $stmtD->bind_param(
       $stmtD_types,
       $id_compra,
@@ -275,40 +235,40 @@ try {
       $r['ram'],
       $r['capacidad'],
       $r['requiere_imei'],
-      $desc,
       $r['cantidad'],
       $r['precio_unitario'],
       $r['iva_porcentaje'],
       $r['subtotal'],
       $r['iva'],
-      $r['total']
+      $r['total'],
+      $dtoStr,
+      $dtoIvaStr
     );
-    if (!$stmtD->execute()) { throw new Exception("Insert detalle: ".$stmtD->error); }
+    if (!$stmtD->execute()) throw new Exception("Insert detalle: ".$stmtD->error);
   }
   $stmtD->close();
 
-  // Otros cargos
-  if (!empty($extra_desc) && is_array($extra_desc)) {
+  // Otros cargos (si existe la tabla)
+  if (!empty($extra_desc) && is_array($extra_desc) &&
+      $conn->query("SHOW TABLES LIKE 'compras_cargos'")->num_rows) {
     $sqlX = "INSERT INTO compras_cargos
               (id_compra, descripcion, monto, iva_porcentaje, iva_monto, total, afecta_costo)
              VALUES (?,?,?,?,?,?,?)";
     $stmtX = $conn->prepare($sqlX);
-    if (!$stmtX) { throw new Exception("Prepare cargos: ".$conn->error); }
+    if (!$stmtX) throw new Exception("Prepare cargos: ".$conn->error);
 
     foreach ($extra_desc as $i => $descRaw) {
       $desc  = trim((string)$descRaw);
       $monto = isset($extra_monto[$i]) ? (float)$extra_monto[$i] : 0.0;
       $ivaP  = isset($extra_iva_porcentaje[$i]) ? (float)$extra_iva_porcentaje[$i] : 0.0;
-      if ($desc === '' || $monto <= 0) { continue; }
+      if ($desc === '' || $monto <= 0) continue;
 
       $ivaMonto = round($monto * ($ivaP/100.0), 2);
       $totCargo = round($monto + $ivaMonto, 2);
       $afecta   = 0;
 
-      $stmtX->bind_param("isddddi",
-        $id_compra, $desc, $monto, $ivaP, $ivaMonto, $totCargo, $afecta
-      );
-      if (!$stmtX->execute()) { throw new Exception("Insert cargos: ".$stmtX->error); }
+      $stmtX->bind_param("isddddi", $id_compra, $desc, $monto, $ivaP, $ivaMonto, $totCargo, $afecta);
+      if (!$stmtX->execute()) throw new Exception("Insert cargos: ".$stmtX->error);
     }
     $stmtX->close();
   }
@@ -322,17 +282,13 @@ try {
     $pago_fecha  = $_POST['pago_fecha'] ?? date('Y-m-d');
     $pago_notas  = substr(trim($_POST['pago_nota'] ?? ''), 0, 1000);
 
-    if ($pago_monto < 0) $pago_monto = 0.0;
-
     $sqlP = "INSERT INTO compras_pagos
              (id_compra, fecha_pago, monto, metodo_pago, referencia, notas)
              VALUES (?,?,?,?,?,?)";
     $stP = $conn->prepare($sqlP);
-    if (!$stP) { throw new Exception('Prepare pago: '.$conn->error); }
-    $stP->bind_param("isdsss",
-      $id_compra, $pago_fecha, $pago_monto, $pago_metodo, $pago_ref, $pago_notas
-    );
-    if (!$stP->execute()) { throw new Exception('Insert pago: '.$stP->error); }
+    if (!$stP) throw new Exception('Prepare pago: '.$conn->error);
+    $stP->bind_param("isdsss", $id_compra, $pago_fecha, $pago_monto, $pago_metodo, $pago_ref, $pago_notas);
+    if (!$stP->execute()) throw new Exception('Insert pago: '.$stP->error);
     $stP->close();
 
     if ($pago_monto >= $total) {
