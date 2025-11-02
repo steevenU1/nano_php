@@ -1,5 +1,5 @@
 <?php
-// compras_nueva.php — Central 2.0 (con Descuento por renglón)
+// compras_nueva.php — Central 2.0 (con Descuento por renglón + soporte Accesorios)
 // Captura de factura de compra por renglones de MODELO + Otros cargos
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
 if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
@@ -27,10 +27,11 @@ $sucursales = [];
 $res2 = $conn->query("SELECT id, nombre FROM sucursales ORDER BY nombre");
 while ($row = $res2->fetch_assoc()) { $sucursales[] = $row; }
 
-// Catálogo de modelos (solo activos)
+// Catálogo de modelos (solo activos) — incluir tipo_producto para Accesorios
 $modelos = [];
 $res3 = $conn->query("
-  SELECT id, marca, modelo, codigo_producto, color, ram, capacidad
+  SELECT id, marca, modelo, codigo_producto, color, ram, capacidad, 
+         UPPER(COALESCE(tipo_producto,'')) AS tipo_producto
   FROM catalogo_modelos
   WHERE activo=1
   ORDER BY marca, modelo, color, ram, capacidad
@@ -59,23 +60,24 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
     .kicker{ color:#6b7280; font-size:.9rem; }
 
     /* Tabla renglones (modelos) */
-    #tablaDetalle th, #tablaDetalle td{ white-space:nowrap; }
-    #tablaDetalle .col-codigo{ min-width: 320px; }
-    #tablaDetalle .col-color{ width: 120px; }
+    #tablaDetalle th, #tablaDetalle td{ white-space:nowrap; vertical-align: middle; }
+    #tablaDetalle .col-codigo{ min-width: 330px; }
+    #tablaDetalle .col-color{ width: 130px; }
     #tablaDetalle .col-ram{ width: 110px; }
-    #tablaDetalle .col-cap{ width: 130px; }
+    #tablaDetalle .col-cap{ width: 140px; }
     #tablaDetalle .col-qty{ width: 90px; }
     #tablaDetalle .col-pu{ width: 130px; }
     #tablaDetalle .col-ivp{ width: 110px; }
     #tablaDetalle .col-sub{ width: 130px; }
     #tablaDetalle .col-iva{ width: 120px; }
     #tablaDetalle .col-tot{ width: 140px; }
-    #tablaDetalle .col-req{ width: 120px; text-align:center; }
+    #tablaDetalle .col-req{ width: 140px; text-align:center; }
     #tablaDetalle .col-dto{ width: 110px; text-align:center; }
     #tablaDetalle .col-acc{ width: 64px; }
     #tablaDetalle .form-control{ padding:.35rem .55rem; }
     #tablaDetalle input.num{ text-align:right; }
     #tablaDetalle input[readonly]{ background:#f8fafc; cursor:not-allowed; }
+    .tipo-chip{ position:absolute; right:6px; top:6px; font-size:.7rem; padding:.1rem .45rem; border-radius:999px; border:1px solid #e2e8f0; background:#fff; color:#334155; }
 
     /* Tabla otros cargos */
     #tablaCargos th, #tablaCargos td{ white-space:nowrap; }
@@ -179,7 +181,10 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
             <div class="d-flex justify-content-between align-items-center mb-2">
               <div>
                 <h5 class="mb-0">Detalle por modelo</h5>
-                <div class="kicker">Captura por <b>código o marca/modelo</b>. El IVA por renglón parte del valor default.</div>
+                <div class="kicker">
+                  Captura por <b>código o marca/modelo</b>. El IVA por renglón parte del valor default. 
+                  Accesorios no requieren IMEI y permiten editar Color/Capacidad.
+                </div>
               </div>
               <div class="d-flex gap-2">
                 <a class="btn btn-sm btn-outline-secondary rounded-pill" href="modelos.php" target="_blank"><i class="bi bi-plus-lg me-1"></i>Nuevo modelo</a>
@@ -211,8 +216,8 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
             </div>
 
             <div class="hint mt-2">
-              Tip: marca/desmarca “Requiere IMEI” si el modelo lo amerita (p. ej. accesorios). Activa “Desc.” para capturar
-              <em>Costo Descuento</em> y <em>Costo Descuento c/IVA</em> del renglón.
+              Tip: el sistema detecta <b>Accesorio</b> desde el catálogo y apaga IMEI automáticamente.
+              Activa “Desc.” para capturar <em>Costo Descuento</em> y <em>Costo Descuento c/IVA</em> del renglón.
             </div>
           </div>
         </div>
@@ -285,10 +290,11 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
 <!-- Datalist global -->
 <datalist id="dlModelos">
   <?php foreach ($modelos as $m):
-    $desc = trim(($m['marca'] ?? '').' '.($m['modelo'] ?? '').' · '.($m['color']??'').' · '.($m['ram']??'').' · '.($m['capacidad']??'')); 
+    $desc = trim(($m['marca'] ?? '').' '.($m['modelo'] ?? '').' · '.($m['color']??'').' · '.($m['ram']??'').' · '.($m['capacidad']??''));
     $val  = $m['codigo_producto'] ?: (($m['marca']??'').' '.($m['modelo']??''));
+    $tipo = $m['tipo_producto'] ?: '';
   ?>
-    <option value="<?= h($val) ?>" label="<?= h($desc) ?>"></option>
+    <option value="<?= h($val) ?>" label="<?= h(($tipo ? "[$tipo] " : "").$desc) ?>"></option>
   <?php endforeach; ?>
 </datalist>
 
@@ -308,11 +314,13 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
               <tr>
                 <th>#</th>
                 <th>Código / Modelo</th>
+                <th>Tipo</th>
                 <th>Color</th>
                 <th>RAM</th>
                 <th>Capacidad</th>
                 <th class="text-end">Cantidad</th>
                 <th class="text-end">P. Unitario</th>
+                <th class="text-center">IMEI</th>
               </tr>
             </thead>
             <tbody id="cfBody"></tbody>
@@ -525,11 +533,52 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
     byEtiquetaNorm[norm(et)] = m;
   });
 
+  // Aplica datos del modelo al renglón y ajusta UI si es ACCESORIO
   function aplicarModeloEnRenglon(m, tr){
+    const isAcc = (String(m.tipo_producto||'') === 'ACCESORIO');
+
     tr.querySelector('.mm-id').value     = m.id;
-    tr.querySelector('.color').value     = m.color || '—';
-    tr.querySelector('.ram').value       = m.ram || '—';
-    tr.querySelector('.capacidad').value = m.capacidad || '—';
+    // Color/RAM/Capacidad: para Accesorio permitimos edición en Color/Capacidad; RAM en — (readonly)
+    const colorEl = tr.querySelector('.color');
+    const ramEl   = tr.querySelector('.ram');
+    const capEl   = tr.querySelector('.capacidad');
+
+    colorEl.value = m.color || '';
+    capEl.value   = m.capacidad || '';
+    ramEl.value   = m.ram || '—';
+
+    // Toggle readonly según tipo
+    if (isAcc) {
+      colorEl.readOnly = false;
+      capEl.readOnly   = false;
+      ramEl.readOnly   = true; // RAM no aplica en accesorios
+      if (!colorEl.value) colorEl.placeholder = 'Color (opcional)';
+      if (!capEl.value)   capEl.placeholder   = 'Capacidad/Variante';
+    } else {
+      colorEl.readOnly = true;
+      capEl.readOnly   = true;
+      ramEl.readOnly   = true;
+      if (!colorEl.value) colorEl.value = '—';
+      if (!capEl.value)   capEl.value   = '—';
+      if (!ramEl.value)   ramEl.value   = '—';
+    }
+
+    // IMEI: accesorios no requieren
+    const reqHidden = tr.querySelector('.reqi-hidden');
+    const reqChk    = tr.querySelector('.reqi');
+    if (isAcc) {
+      reqChk.checked = false;
+      reqHidden.value = '0';
+    } else {
+      reqChk.checked = true;
+      reqHidden.value = '1';
+    }
+
+    // Chip visual del tipo en la celda del buscador
+    const chip = tr.querySelector('.tipo-chip');
+    chip.textContent = isAcc ? 'Accesorio' : 'Equipo';
+
+    // quita invalidez del buscador
     const mm = tr.querySelector('.mm-buscar');
     mm.classList.remove('is-invalid');
     mm.setCustomValidity('');
@@ -562,13 +611,20 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
         <div class="position-relative">
           <input type="text" class="form-control mm-buscar" list="dlModelos"
                  placeholder="Escribe código o marca/modelo" autocomplete="off" required>
+          <span class="tipo-chip">—</span>
           <input type="hidden" name="id_modelo[${idx}]" class="mm-id">
           <div class="invalid-feedback">Elige un código válido del catálogo.</div>
         </div>
       </td>
-      <td class="col-color"><input type="text" class="form-control color" name="color[${idx}]" readonly required></td>
-      <td class="col-ram"><input type="text" class="form-control ram" name="ram[${idx}]" readonly></td>
-      <td class="col-cap"><input type="text" class="form-control capacidad" name="capacidad[${idx}]" readonly required></td>
+      <td class="col-color">
+        <input type="text" class="form-control color" name="color[${idx}]" required readonly>
+      </td>
+      <td class="col-ram">
+        <input type="text" class="form-control ram" name="ram[${idx}]" readonly>
+      </td>
+      <td class="col-cap">
+        <input type="text" class="form-control capacidad" name="capacidad[${idx}]" required readonly>
+      </td>
       <td class="col-qty"><input type="number" min="1" value="1" class="form-control num qty" name="cantidad[${idx}]" required></td>
       <td class="col-pu">
         <input type="number" step="0.01" min="0" value="0" class="form-control num pu" name="precio_unitario[${idx}]" required>
@@ -579,8 +635,11 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
       <td class="col-iva riva">$0.00</td>
       <td class="col-tot rtot">$0.00</td>
       <td class="col-req">
-        <input type="hidden" name="requiere_imei[${idx}]" value="0">
-        <input type="checkbox" class="form-check-input reqi" name="requiere_imei[${idx}]" value="1" checked>
+        <input type="hidden" class="reqi-hidden" name="requiere_imei[${idx}]" value="1">
+        <div class="form-check d-flex align-items-center justify-content-center gap-2">
+          <input type="checkbox" class="form-check-input reqi" value="1" checked>
+          <span class="small text-muted">IMEI</span>
+        </div>
       </td>
       <td class="col-dto">
         <div class="d-flex align-items-center justify-content-center gap-2">
@@ -593,6 +652,13 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
       <td class="col-acc"><button type="button" class="btn btn-sm btn-outline-danger rounded-pill btnQuitar" title="Quitar">&times;</button></td>
     `;
     tbody.appendChild(tr);
+
+    // Al cambiar el checkbox visible, sincroniza el hidden
+    const reqChk = tr.querySelector('.reqi');
+    const reqHidden = tr.querySelector('.reqi-hidden');
+    reqChk.addEventListener('change', () => {
+      reqHidden.value = reqChk.checked ? '1' : '0';
+    });
 
     tr.querySelectorAll('input,select').forEach(el => el.addEventListener('input', calcTotales));
     tr.querySelector('.btnQuitar').addEventListener('click', () => { tr.remove(); calcTotales(); });
@@ -638,12 +704,9 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
         const codTxt = input.value || '';
         mdDtoInfo.textContent = 'Renglón: ' + (codTxt || '—');
 
-        // Mostrar modal y asegurar listeners activos
         modalDto.show();
-        syncDtoIva(); // primer cálculo por si cambiaste IVA o base antes
-
+        syncDtoIva();
       } else {
-        // limpiar
         hdto.value = '';
         hdtoiva.value = '';
         badge.classList.add('d-none');
@@ -675,7 +738,7 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
     modalDto.hide();
   });
 
-  // Si cancelan el modal, desactiva el check (para evitar “Desc.” sin valores)
+  // Si cancelan el modal, desactiva el check si no hay valores
   document.getElementById('modalDto').addEventListener('hidden.bs.modal', () => {
     if (!currentDtoRow) return;
     const hdto   = currentDtoRow.querySelector('.hdto').value;
@@ -735,7 +798,7 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
       e.preventDefault(); alert('Agrega al menos un renglón'); return;
     }
 
-    // Pre-aplicar por seguridad
+    // Pre-aplicar por seguridad (resuelve código/etiqueta a id_modelo)
     document.querySelectorAll('#tablaDetalle tbody tr.renglon .mm-buscar')
       .forEach(inp => {
         const tr = inp.closest('tr');
@@ -781,15 +844,19 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
       const cap    = tr.querySelector('.capacidad').value || '';
       const qty    = parseFloat(tr.querySelector('.qty').value) || 0;
       const pu     = parseFloat(tr.querySelector('.pu').value) || 0;
+      const reqImei= (tr.querySelector('.reqi')?.checked) ? 'Sí' : 'No';
+      const tipo   = tr.querySelector('.tipo-chip')?.textContent || '—';
       const trHtml = `
         <tr>
           <td>${idx+1}</td>
           <td>${htmlesc(codTxt || '-')}</td>
+          <td>${htmlesc(tipo)}</td>
           <td>${htmlesc(color || '-')}</td>
           <td>${htmlesc(ram || '-')}</td>
           <td>${htmlesc(cap || '-')}</td>
           <td class="text-end">${qty}</td>
           <td class="text-end">$${formato(pu)}</td>
+          <td class="text-center">${reqImei}</td>
         </tr>
       `;
       cfBody.insertAdjacentHTML('beforeend', trHtml);
@@ -904,7 +971,6 @@ while ($row = $res3->fetch_assoc()) { $modelos[] = $row; }
       : 16;
     mdDtoCostoIva.value = (base * (1 + ivp/100)).toFixed(2);
   }
-  // Recalcular cuando el usuario edite el costo de descuento
   mdDtoCosto.addEventListener('input',  syncDtoIva);
   mdDtoCosto.addEventListener('change', syncDtoIva);
 

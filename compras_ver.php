@@ -1,19 +1,18 @@
 <?php
 // compras_ver.php
 session_start();
-if (!isset($_SESSION['id_usuario'])) {
-  header("Location: index.php");
-  exit();
-}
-include 'db.php';
+if (!isset($_SESSION['id_usuario'])) { header("Location: index.php"); exit(); }
+require_once __DIR__.'/db.php';
 
-// ID de compra (desde GET o desde POST al agregar pago)
+// ============================
+// ID de compra
+// ============================
 $id = (int)($_POST['id_compra'] ?? ($_GET['id'] ?? 0));
 if ($id <= 0) die("ID inválido.");
 
-/* ============================
-   Helpers: tablas/columnas
-============================ */
+// ============================
+// Helpers
+// ============================
 function table_exists(mysqli $conn, string $table): bool {
   $t = $conn->real_escape_string($table);
   $q = $conn->query("SHOW TABLES LIKE '{$t}'");
@@ -27,9 +26,16 @@ function column_exists(mysqli $conn, string $table, string $col): bool {
 }
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
-/* ============================
-   POST: Agregar pago (modal)
-============================ */
+// ¿La tabla de ingresos tiene columna "cantidad"?
+$hasCantIngreso = table_exists($conn,'compras_detalle_ingresos') && column_exists($conn,'compras_detalle_ingresos','cantidad');
+// Fragmento SQL para calcular "ingresadas"
+$ingAgg = $hasCantIngreso
+  ? "COALESCE((SELECT COALESCE(SUM(x.cantidad),0) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id),0)"
+  : "COALESCE((SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id),0)";
+
+// ============================
+// POST: Agregar pago
+// ============================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'agregar_pago') {
   $fecha_pago  = $_POST['fecha_pago'] ?: date('Y-m-d');
   $monto       = (float)($_POST['monto'] ?? 0);
@@ -44,30 +50,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'agreg
     $stmt->close();
 
     if ($ok) {
-      $resTot = $conn->query("SELECT total FROM compras WHERE id=".$id);
-      $rowTot = $resTot ? $resTot->fetch_assoc() : null;
+      $resTot = $conn->prepare("SELECT total FROM compras WHERE id=?");
+      $resTot->bind_param("i", $id);
+      $resTot->execute();
+      $rowTot = $resTot->get_result()->fetch_assoc();
+      $resTot->close();
       $totalCompra = $rowTot ? (float)$rowTot['total'] : 0;
 
-      $resPag = $conn->query("SELECT COALESCE(SUM(monto),0) AS pagado FROM compras_pagos WHERE id_compra=".$id);
-      $rowPag = $resPag ? $resPag->fetch_assoc() : null;
+      $resPag = $conn->prepare("SELECT COALESCE(SUM(monto),0) AS pagado FROM compras_pagos WHERE id_compra=?");
+      $resPag->bind_param("i", $id);
+      $resPag->execute();
+      $rowPag = $resPag->get_result()->fetch_assoc();
+      $resPag->close();
       $pagado = $rowPag ? (float)$rowPag['pagado'] : 0;
 
       if ($pagado >= $totalCompra && $totalCompra > 0) {
-        $conn->query("UPDATE compras SET estatus='Pagada' WHERE id=".$id);
+        $u = $conn->prepare("UPDATE compras SET estatus='Pagada' WHERE id=?");
+        $u->bind_param("i", $id);
+        $u->execute();
+        $u->close();
       }
     }
   }
-
   header("Location: compras_ver.php?id=".$id);
   exit();
 }
 
-/* ============================
-   GET: Export Excel (xls)
-   compras_ver.php?id=123&excel=1
-============================ */
+// ============================
+// GET: Excel
+// ============================
 if (isset($_GET['excel'])) {
-  // Encabezado (PREPARED)
+
+  // Encabezado
   $enc = null;
   if ($st = $conn->prepare("
       SELECT c.*, p.nombre AS proveedor, s.nombre AS sucursal
@@ -78,48 +92,50 @@ if (isset($_GET['excel'])) {
   ")) {
     $st->bind_param("i", $id);
     $st->execute();
-    $res = $st->get_result();
-    $enc = $res ? $res->fetch_assoc() : null;
+    $enc = $st->get_result()->fetch_assoc();
     $st->close();
   }
   if (!$enc) die("Compra no encontrada.");
 
-  // Detectar columnas de descuento
   $hasDto    = column_exists($conn, 'compras_detalle', 'costo_dto');
   $hasDtoIva = column_exists($conn, 'compras_detalle', 'costo_dto_iva');
 
-  // Detalle de modelos
+  // Detalle con "ingresadas" correcto
   $detRows = [];
-  $detQ = $conn->query("
+  $sqlDet = "
     SELECT d.*,
-           (SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id) AS ingresadas
+           {$ingAgg} AS ingresadas
     FROM compras_detalle d
-    WHERE d.id_compra={$id}
-    ORDER BY id ASC
-  ");
-  while ($r = $detQ->fetch_assoc()) $detRows[] = $r;
+    WHERE d.id_compra = ?
+    ORDER BY d.id ASC
+  ";
+  if ($st = $conn->prepare($sqlDet)) {
+    $st->bind_param("i", $id);
+    $st->execute();
+    $res = $st->get_result();
+    while ($r = $res->fetch_assoc()) $detRows[] = $r;
+    $st->close();
+  }
 
-  // Sumas
-  $sumDet = $conn->query("
-    SELECT COALESCE(SUM(subtotal),0) AS sub,
-           COALESCE(SUM(iva),0)      AS iva,
-           COALESCE(SUM(total),0)    AS tot
-    FROM compras_detalle WHERE id_compra={$id}
-  ")->fetch_assoc();
-  $sumCar = $conn->query("
-    SELECT COALESCE(SUM(monto),0)      AS sub,
-           COALESCE(SUM(iva_monto),0)  AS iva,
-           COALESCE(SUM(total),0)      AS tot
-    FROM compras_cargos WHERE id_compra={$id}
-  ")->fetch_assoc();
+  // Totales modelos y cargos
+  $sumDet = $conn->prepare("SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot FROM compras_detalle WHERE id_compra=?");
+  $sumDet->bind_param("i",$id);
+  $sumDet->execute();
+  $rowDet = $sumDet->get_result()->fetch_assoc();
+  $sumDet->close();
 
-  // Ingresos con IMEI/series (si existe la tabla)
+  $sumCar = $conn->prepare("SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot FROM compras_cargos WHERE id_compra=?");
+  $sumCar->bind_param("i",$id);
+  $sumCar->execute();
+  $rowCar = $sumCar->get_result()->fetch_assoc();
+  $sumCar->close();
+
+  // IMEIs/series (si existe)
   $imeiRows = [];
   $candDynamic = ['imei1','imei','imei2','serial','n_serie','lote','id_producto','creado_en'];
   if (table_exists($conn, 'compras_detalle_ingresos')) {
     $present = [];
     foreach ($candDynamic as $c) if (column_exists($conn,'compras_detalle_ingresos',$c)) $present[]=$c;
-
     $selectImeis = "";
     foreach ($present as $c) $selectImeis .= ", i.`{$c}` AS `{$c}`";
 
@@ -135,19 +151,15 @@ if (isset($_GET['excel'])) {
     if ($resI) while($x=$resI->fetch_assoc()) $imeiRows[]=$x;
   }
 
-  // Nombre archivo
-  $num = preg_replace('/[^A-Za-z0-9_\-]/','_', (string)($enc['num_factura'] ?? "compra_{$id}"));
-  $fname = "factura_{$num}.xls";
-
   // Headers Excel
+  $num   = preg_replace('/[^A-Za-z0-9_\-]/','_', (string)($enc['num_factura'] ?? "compra_{$id}"));
+  $fname = "factura_{$num}.xls";
   header("Content-Type: application/vnd.ms-excel; charset=UTF-8");
   header("Content-Disposition: attachment; filename=\"{$fname}\"");
   header("Cache-Control: max-age=0, no-cache, no-store, must-revalidate");
 
-  echo "<html><head><meta charset='UTF-8'><title>".h($fname)."</title>"
-      ."<style>.text{mso-number-format:'\\@';}</style></head><body>";
+  echo "<html><head><meta charset='UTF-8'><title>".h($fname)."</title><style>.text{mso-number-format:'\\@';}</style></head><body>";
 
-  // === Resumen
   echo "<h3>Factura #".h($enc['num_factura'])."</h3>";
   echo "<table border='1' cellspacing='0' cellpadding='4'>";
   echo "<tr><th align='left'>Proveedor</th><td>".h($enc['proveedor'])."</td></tr>";
@@ -160,7 +172,6 @@ if (isset($_GET['excel'])) {
   echo "<tr><th align='left'>Total factura</th><td>".number_format((float)$enc['total'],2,'.','')."</td></tr>";
   echo "</table><br>";
 
-  // === Detalle de modelos (con columnas de descuento si existen)
   echo "<h3>Detalle de modelos</h3>";
   echo "<table border='1' cellspacing='0' cellpadding='4'>";
   echo "<tr>
@@ -196,22 +207,20 @@ if (isset($_GET['excel'])) {
     echo "<td>".number_format((float)$r['total'],2,'.','')."</td>";
     echo "</tr>";
   }
-  echo "<tr><th colspan='".(10 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>Subtotal (modelos)</th><th>".number_format((float)$sumDet['sub'],2,'.','')."</th><th colspan='2'></th></tr>";
-  echo "<tr><th colspan='".(11 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>IVA (modelos)</th><th>".number_format((float)$sumDet['iva'],2,'.','')."</th><th></th></tr>";
-  echo "<tr><th colspan='".(12 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>Total (modelos)</th><th>".number_format((float)$sumDet['tot'],2,'.','')."</th></tr>";
+  echo "<tr><th colspan='".(10 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>Subtotal (modelos)</th><th>".number_format((float)$rowDet['sub'],2,'.','')."</th><th colspan='2'></th></tr>";
+  echo "<tr><th colspan='".(11 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>IVA (modelos)</th><th>".number_format((float)$rowDet['iva'],2,'.','')."</th><th></th></tr>";
+  echo "<tr><th colspan='".(12 + ($hasDto?1:0) + ($hasDtoIva?1:0))."' align='right'>Total (modelos)</th><th>".number_format((float)$rowDet['tot'],2,'.','')."</th></tr>";
   echo "</table>";
 
-  // === Otros cargos (totales)
-  if ($sumCar && ((float)$sumCar['tot'])>0) {
+  if ($rowCar && ((float)$rowCar['tot'])>0) {
     echo "<br><h3>Otros cargos</h3>";
     echo "<table border='1' cellspacing='0' cellpadding='4'>";
-    echo "<tr><th>Subtotal (cargos)</th><td>".number_format((float)$sumCar['sub'],2,'.','')."</td></tr>";
-    echo "<tr><th>IVA (cargos)</th><td>".number_format((float)$sumCar['iva'],2,'.','')."</td></tr>";
-    echo "<tr><th>Total (cargos)</th><td>".number_format((float)$sumCar['tot'],2,'.','')."</td></tr>";
+    echo "<tr><th>Subtotal (cargos)</th><td>".number_format((float)$rowCar['sub'],2,'.','')."</td></tr>";
+    echo "<tr><th>IVA (cargos)</th><td>".number_format((float)$rowCar['iva'],2,'.','')."</td></tr>";
+    echo "<tr><th>Total (cargos)</th><td>".number_format((float)$rowCar['tot'],2,'.','')."</td></tr>";
     echo "</table>";
   }
 
-  // === Ingresos con IMEIs/series
   if (!empty($imeiRows)) {
     echo "<br><h3>Ingresos (IMEI / series) de esta factura</h3>";
     echo "<table border='1' cellspacing='0' cellpadding='4'><tr>";
@@ -239,18 +248,13 @@ if (isset($_GET['excel'])) {
     }
     echo "</table>";
   }
-
   echo "</body></html>";
   exit;
 }
 
-// (Navbar se incluye después del handler de Excel, para no romper headers)
-include 'navbar.php';
-
-/* ============================
-   Consultas base (vista)
-============================ */
-// Encabezado (PREPARED) — aquí estaba el INNER INNER JOIN
+// ============================
+// Encabezado (vista)
+// ============================
 $enc = null;
 if ($st = $conn->prepare("
     SELECT c.*, p.nombre AS proveedor, s.nombre AS sucursal
@@ -261,56 +265,74 @@ if ($st = $conn->prepare("
 ")) {
   $st->bind_param("i", $id);
   $st->execute();
-  $res = $st->get_result();
-  $enc = $res ? $res->fetch_assoc() : null;
+  $enc = $st->get_result()->fetch_assoc();
   $st->close();
 }
 if (!$enc) die("Compra no encontrada.");
 
-// Detectar si existen columnas de descuento
 $hasDto    = column_exists($conn, 'compras_detalle', 'costo_dto');
 $hasDtoIva = column_exists($conn, 'compras_detalle', 'costo_dto_iva');
 
-$det = $conn->query("
+// Detalle con "ingresadas" correcto
+$det = null;
+$sqlDetVista = "
   SELECT d.*,
-         (SELECT COUNT(*) FROM compras_detalle_ingresos x WHERE x.id_detalle=d.id) AS ingresadas
+         {$ingAgg} AS ingresadas
   FROM compras_detalle d
-  WHERE d.id_compra=$id
-  ORDER BY id ASC
-");
+  WHERE d.id_compra = ?
+  ORDER BY d.id ASC
+";
+if ($st = $conn->prepare($sqlDetVista)) {
+  $st->bind_param("i", $id);
+  $st->execute();
+  $det = $st->get_result(); // se itera más abajo
+}
 
-$pagos = $conn->query("
+// Pagos
+$pagos = $conn->prepare("
   SELECT id, fecha_pago, monto, metodo_pago, referencia, notas, creado_en
   FROM compras_pagos
-  WHERE id_compra=$id
+  WHERE id_compra=?
   ORDER BY fecha_pago DESC, id DESC
 ");
+$pagos->bind_param("i", $id);
+$pagos->execute();
+$resPagos = $pagos->get_result();
 
-$rowSum = $conn->query("SELECT COALESCE(SUM(monto),0) AS pagado FROM compras_pagos WHERE id_compra=$id")->fetch_assoc();
-$totalPagado = (float)$rowSum['pagado'];
+// Totales pagados/saldo
+$rowSum = $conn->prepare("SELECT COALESCE(SUM(monto),0) AS pagado FROM compras_pagos WHERE id_compra=?");
+$rowSum->bind_param("i",$id);
+$rowSum->execute();
+$sumPag = $rowSum->get_result()->fetch_assoc();
+$rowSum->close();
+$totalPagado = (float)($sumPag['pagado'] ?? 0);
 $saldo = max(0, (float)$enc['total'] - $totalPagado);
 
-// Otros cargos y sumas
-$cargos = $conn->query("
+// Cargos y sumas
+$cargos = $conn->prepare("
   SELECT id, descripcion, monto, iva_porcentaje, iva_monto, total, afecta_costo, creado_en
   FROM compras_cargos
-  WHERE id_compra=$id
+  WHERE id_compra=?
   ORDER BY id ASC
 ");
+$cargos->bind_param("i",$id);
+$cargos->execute();
+$resCargos = $cargos->get_result();
 
-$sumDet = $conn->query("
-  SELECT COALESCE(SUM(subtotal),0) AS sub,
-         COALESCE(SUM(iva),0)      AS iva,
-         COALESCE(SUM(total),0)    AS tot
-  FROM compras_detalle WHERE id_compra=$id
-")->fetch_assoc();
+$sumDet = $conn->prepare("SELECT COALESCE(SUM(subtotal),0) AS sub, COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS tot FROM compras_detalle WHERE id_compra=?");
+$sumDet->bind_param("i",$id);
+$sumDet->execute();
+$rowDet = $sumDet->get_result()->fetch_assoc();
+$sumDet->close();
 
-$sumCar = $conn->query("
-  SELECT COALESCE(SUM(monto),0)      AS sub,
-         COALESCE(SUM(iva_monto),0)  AS iva,
-         COALESCE(SUM(total),0)      AS tot
-  FROM compras_cargos WHERE id_compra=$id
-")->fetch_assoc();
+$sumCar = $conn->prepare("SELECT COALESCE(SUM(monto),0) AS sub, COALESCE(SUM(iva_monto),0) AS iva, COALESCE(SUM(total),0) AS tot FROM compras_cargos WHERE id_compra=?");
+$sumCar->bind_param("i",$id);
+$sumCar->execute();
+$rowCar = $sumCar->get_result()->fetch_assoc();
+$sumCar->close();
+
+// Navbar después de headers
+require_once __DIR__.'/navbar.php';
 ?>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
@@ -369,27 +391,26 @@ $sumCar = $conn->query("
       </thead>
       <tbody>
         <?php while ($r = $det->fetch_assoc()):
-          $pend         = max(0, (int)$r['cantidad'] - (int)$r['ingresadas']);
+          $ing  = (int)$r['ingresadas'];
+          $cant = (int)$r['cantidad'];
+          $pend = max(0, $cant - $ing);
           $tieneDto     = $hasDto    && isset($r['costo_dto'])     && $r['costo_dto']     !== null && (float)$r['costo_dto']     > 0;
           $tieneDtoIva  = $hasDtoIva && isset($r['costo_dto_iva']) && $r['costo_dto_iva'] !== null && (float)$r['costo_dto_iva'] > 0;
         ?>
           <tr class="<?= $pend > 0 ? 'table-warning' : 'table-success' ?>">
             <td><?= h($r['marca']) ?></td>
-
-            <!-- Modelo con BADGE "Dto" si aplica -->
             <td>
               <?= h($r['modelo']) ?>
               <?php if ($tieneDto || $tieneDtoIva): ?>
                 <span class="badge rounded-pill bg-primary ms-1" title="Renglón con costo descuento">Dto</span>
               <?php endif; ?>
             </td>
-
             <td><?= h($r['color']) ?></td>
             <td><?= h($r['ram'] ?? '') ?></td>
             <td><?= h($r['capacidad']) ?></td>
             <td class="text-center"><?= $r['requiere_imei'] ? 'Sí' : 'No' ?></td>
-            <td class="text-end"><?= (int)$r['cantidad'] ?></td>
-            <td class="text-end"><?= (int)$r['ingresadas'] ?></td>
+            <td class="text-end"><?= $cant ?></td>
+            <td class="text-end"><?= $ing ?></td>
             <td class="text-end">$<?= number_format((float)$r['precio_unitario'], 2) ?></td>
 
             <?php if ($hasDto): ?>
@@ -416,17 +437,17 @@ $sumCar = $conn->query("
       <tfoot>
         <tr>
           <th colspan="<?= 10 + ($hasDto ? 1 : 0) + ($hasDtoIva ? 1 : 0) ?>" class="text-end">Subtotal (modelos)</th>
-          <th class="text-end">$<?= number_format((float)$sumDet['sub'], 2) ?></th>
+          <th class="text-end">$<?= number_format((float)$rowDet['sub'], 2) ?></th>
           <th colspan="3"></th>
         </tr>
         <tr>
           <th colspan="<?= 11 + ($hasDto ? 1 : 0) + ($hasDtoIva ? 1 : 0) ?>" class="text-end">IVA (modelos)</th>
-          <th class="text-end">$<?= number_format((float)$sumDet['iva'], 2) ?></th>
+          <th class="text-end">$<?= number_format((float)$rowDet['iva'], 2) ?></th>
           <th colspan="2"></th>
         </tr>
         <tr class="table-light">
           <th colspan="<?= 12 + ($hasDto ? 1 : 0) + ($hasDtoIva ? 1 : 0) ?>" class="text-end fs-6">Total (modelos)</th>
-          <th class="text-end fs-6">$<?= number_format((float)$sumDet['tot'], 2) ?></th>
+          <th class="text-end fs-6">$<?= number_format((float)$rowDet['tot'], 2) ?></th>
           <th></th>
         </tr>
       </tfoot>
@@ -437,16 +458,16 @@ $sumCar = $conn->query("
   <div class="card shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <strong>Otros cargos</strong>
-      <?php if ($sumCar && ((float)$sumCar['tot']) > 0): ?>
+      <?php if ($rowCar && ((float)$rowCar['tot']) > 0): ?>
         <span class="text-muted small">
-          Subtotal: $<?= number_format((float)$sumCar['sub'], 2) ?> ·
-          IVA: $<?= number_format((float)$sumCar['iva'], 2) ?> ·
-          Total: $<?= number_format((float)$sumCar['tot'], 2) ?>
+          Subtotal: $<?= number_format((float)$rowCar['sub'], 2) ?> ·
+          IVA: $<?= number_format((float)$rowCar['iva'], 2) ?> ·
+          Total: $<?= number_format((float)$rowCar['tot'], 2) ?>
         </span>
       <?php endif; ?>
     </div>
     <div class="card-body">
-      <?php if ($cargos && $cargos->num_rows > 0): ?>
+      <?php if ($resCargos && $resCargos->num_rows > 0): ?>
         <div class="table-responsive">
           <table class="table table-sm table-bordered align-middle">
             <thead class="table-light">
@@ -460,7 +481,7 @@ $sumCar = $conn->query("
               </tr>
             </thead>
             <tbody>
-              <?php while ($x = $cargos->fetch_assoc()): ?>
+              <?php while ($x = $resCargos->fetch_assoc()): ?>
                 <tr>
                   <td><?= h($x['descripcion']) ?></td>
                   <td class="text-end">$<?= number_format((float)$x['monto'], 2) ?></td>
@@ -474,10 +495,10 @@ $sumCar = $conn->query("
             <tfoot>
               <tr>
                 <th class="text-end">Subtotal (cargos)</th>
-                <th class="text-end">$<?= number_format((float)$sumCar['sub'], 2) ?></th>
+                <th class="text-end">$<?= number_format((float)$rowCar['sub'], 2) ?></th>
                 <th></th>
-                <th class="text-end">$<?= number_format((float)$sumCar['iva'], 2) ?></th>
-                <th class="text-end">$<?= number_format((float)$sumCar['tot'], 2) ?></th>
+                <th class="text-end">$<?= number_format((float)$rowCar['iva'], 2) ?></th>
+                <th class="text-end">$<?= number_format((float)$rowCar['tot'], 2) ?></th>
                 <th></th>
               </tr>
             </tfoot>
@@ -496,28 +517,28 @@ $sumCar = $conn->query("
         <div class="card-body">
           <div class="d-flex justify-content-between">
             <span>Subtotal modelos</span>
-            <strong>$<?= number_format((float)$sumDet['sub'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowDet['sub'], 2) ?></strong>
           </div>
           <div class="d-flex justify-content-between">
             <span>IVA modelos</span>
-            <strong>$<?= number_format((float)$sumDet['iva'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowDet['iva'], 2) ?></strong>
           </div>
           <div class="d-flex justify-content-between mb-2">
             <span>Total modelos</span>
-            <strong>$<?= number_format((float)$sumDet['tot'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowDet['tot'], 2) ?></strong>
           </div>
           <hr>
           <div class="d-flex justify-content-between">
             <span>Subtotal otros cargos</span>
-            <strong>$<?= number_format((float)$sumCar['sub'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowCar['sub'], 2) ?></strong>
           </div>
           <div class="d-flex justify-content-between">
             <span>IVA otros cargos</span>
-            <strong>$<?= number_format((float)$sumCar['iva'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowCar['iva'], 2) ?></strong>
           </div>
           <div class="d-flex justify-content-between mb-2">
             <span>Total otros cargos</span>
-            <strong>$<?= number_format((float)$sumCar['tot'], 2) ?></strong>
+            <strong>$<?= number_format((float)$rowCar['tot'], 2) ?></strong>
           </div>
           <hr>
           <div class="d-flex justify-content-between fs-5">
@@ -545,15 +566,14 @@ $sumCar = $conn->query("
         </span>
       </div>
       <?php $puedeAgregarPago = $saldo > 0; ?>
-      <button
-        class="btn btn-sm btn-outline-primary <?= $puedeAgregarPago ? '' : 'disabled' ?>"
-        data-bs-toggle="modal"
-        data-bs-target="#modalPago"
-        <?= $puedeAgregarPago ? '' : 'disabled title="Saldo cubierto: no es posible agregar más pagos"' ?>
-      >+ Agregar pago</button>
+      <button class="btn btn-sm btn-outline-primary <?= $puedeAgregarPago ? '' : 'disabled' ?>"
+              data-bs-toggle="modal" data-bs-target="#modalPago"
+              <?= $puedeAgregarPago ? '' : 'disabled title="Saldo cubierto: no es posible agregar más pagos"' ?>>
+        + Agregar pago
+      </button>
     </div>
     <div class="card-body">
-      <?php if ($pagos && $pagos->num_rows > 0): ?>
+      <?php if ($resPagos && $resPagos->num_rows > 0): ?>
         <div class="table-responsive">
           <table class="table table-sm table-hover align-middle">
             <thead>
@@ -567,7 +587,7 @@ $sumCar = $conn->query("
               </tr>
             </thead>
             <tbody>
-              <?php while ($p = $pagos->fetch_assoc()): ?>
+              <?php while ($p = $resPagos->fetch_assoc()): ?>
                 <tr>
                   <td><?= h($p['fecha_pago']) ?></td>
                   <td><?= h($p['metodo_pago'] ?? '') ?></td>
@@ -586,7 +606,7 @@ $sumCar = $conn->query("
     </div>
   </div>
 
-  <!-- Modal: agregar pago -->
+  <!-- Modal pago -->
   <div class="modal fade" id="modalPago" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
       <form method="post" class="modal-content">
