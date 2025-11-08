@@ -1,6 +1,6 @@
 <?php
-// historial_ventas_accesorios.php — Listado + Export CSV (por renglón si hay tabla de detalle)
-// Detecta si existe detalle_venta_accesorios; si no, cae a export simple por venta.
+// historial_ventas_accesorios.php — Listado + Export CSV + Eliminar (solo Admin con reposición de inventario)
+// Detecta si existe detalle_venta_accesorios; si no, impide eliminar para no perder trazabilidad de inventario.
 
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header('Location: index.php'); exit(); }
@@ -11,6 +11,7 @@ date_default_timezone_set('America/Mexico_City');
 $ROL         = $_SESSION['rol'] ?? '';
 $ID_USUARIO  = (int)($_SESSION['id_usuario'] ?? 0);
 $ID_SUCURSAL = (int)($_SESSION['id_sucursal'] ?? 0);
+$PERM_DELETE = ($ROL === 'Admin'); // Solo Admin puede eliminar
 
 function h($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
 function money($n){ return '$'.number_format((float)$n, 2, '.', ','); }
@@ -31,6 +32,101 @@ function table_exists(mysqli $conn, string $table): bool {
   $ok = (bool)$st->get_result()->fetch_row();
   $st->close();
   return $ok;
+}
+
+/* === Resolver tabla de detalle (necesaria para reponer inventario) === */
+$DETALLE_TAB = null;
+foreach (['detalle_venta_accesorios','detalle_venta_accesorio','detalle_venta_acc','detalle_venta'] as $cand) {
+  if (table_exists($conn, $cand) && column_exists($conn, $cand, 'id_venta') && column_exists($conn, $cand, 'id_producto') && column_exists($conn,$cand,'cantidad')) {
+    $DETALLE_TAB = $cand; break;
+  }
+}
+
+/* === Eliminar venta (solo Admin) === */
+$flash = '';
+if ($PERM_DELETE && isset($_GET['action'], $_GET['id']) && $_GET['action']==='delete') {
+  $ventaId = (int)$_GET['id'];
+
+  try {
+    // Validaciones
+    if ($ventaId <= 0) throw new Exception('ID de venta inválido.');
+    if (!$DETALLE_TAB) throw new Exception('No existe tabla de detalle; no se puede reponer inventario. Eliminación cancelada.');
+
+    // Traer encabezado (para saber sucursal)
+    $stV = $conn->prepare("SELECT id, id_sucursal FROM ventas_accesorios WHERE id=? LIMIT 1");
+    if (!$stV) throw new Exception('No se pudo preparar la consulta de venta.');
+    $stV->bind_param('i', $ventaId);
+    $stV->execute();
+    $venta = $stV->get_result()->fetch_assoc();
+    $stV->close();
+    if (!$venta) throw new Exception('Venta no encontrada.');
+    $idSucursalVenta = (int)$venta['id_sucursal'];
+
+    // Traer detalle (producto, cantidad)
+    $stD = $conn->prepare("SELECT id_producto, cantidad FROM {$DETALLE_TAB} WHERE id_venta=?");
+    if (!$stD) throw new Exception('No se pudo preparar el detalle de la venta.');
+    $stD->bind_param('i', $ventaId);
+    $stD->execute();
+    $det = $stD->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stD->close();
+
+    // Si no hay detalle, no hay forma de reponer
+    if (!$det) throw new Exception('La venta no tiene renglones de detalle; no se puede reponer inventario.');
+
+    $conn->begin_transaction();
+
+    // Reponer inventario por cada renglón (suma a un renglón existente o inserta uno nuevo)
+    // Preferimos sumar al renglón de inventario más antiguo para mantener orden natural.
+    $stUpd = $conn->prepare("
+      UPDATE inventario
+         SET cantidad = cantidad + ?
+       WHERE id_sucursal = ? AND id_producto = ? AND estatus = 'Disponible'
+       ORDER BY id ASC
+       LIMIT 1
+    ");
+    $stIns = $conn->prepare("
+      INSERT INTO inventario (id_producto, id_sucursal, estatus, cantidad, fecha_ingreso)
+      VALUES (?,?, 'Disponible', ?, NOW())
+    ");
+
+    foreach ($det as $r) {
+      $pid  = (int)$r['id_producto'];
+      $cant = max(0, (int)$r['cantidad']);
+
+      if ($cant <= 0) continue;
+
+      // Intentar sumar a un registro existente
+      $stUpd->bind_param('iii', $cant, $idSucursalVenta, $pid);
+      $stUpd->execute();
+
+      if ($stUpd->affected_rows < 1) {
+        // No había registro disponible: insertar uno nuevo
+        $stIns->bind_param('iii', $pid, $idSucursalVenta, $cant);
+        $stIns->execute();
+        if ($stIns->affected_rows < 1) throw new Exception("No se pudo reponer inventario para producto #{$pid}.");
+      }
+    }
+    $stUpd->close();
+    $stIns->close();
+
+    // Borrar detalle y encabezado
+    $stDelD = $conn->prepare("DELETE FROM {$DETALLE_TAB} WHERE id_venta=?");
+    $stDelD->bind_param('i', $ventaId);
+    $stDelD->execute();
+    $stDelD->close();
+
+    $stDelV = $conn->prepare("DELETE FROM ventas_accesorios WHERE id=? LIMIT 1");
+    $stDelV->bind_param('i', $ventaId);
+    $stDelV->execute();
+    $stDelV->close();
+
+    $conn->commit();
+    $flash = '<div class="alert alert-success alert-dismissible fade show mt-2">✅ Venta eliminada y stock repuesto correctamente.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>';
+  } catch (Throwable $e) {
+    if ($conn->errno === 0) { /* noop */ }
+    $conn->rollback();
+    $flash = '<div class="alert alert-danger alert-dismissible fade show mt-2">❌ '.h($e->getMessage()).'<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>';
+  }
 }
 
 /* Columna de fecha */
@@ -91,14 +187,6 @@ $joinsBase = "
   LEFT JOIN usuarios   u ON u.id = v.id_usuario
   LEFT JOIN sucursales s ON s.id = v.id_sucursal
 ";
-
-/* ¿Existe la tabla de detalle? */
-$DETALLE_TAB = null;
-foreach (['detalle_venta_accesorios','detalle_venta_accesorio','detalle_venta_acc','detalle_venta'] as $cand) {
-  if (table_exists($conn, $cand) && column_exists($conn, $cand, 'id_venta') && column_exists($conn, $cand, 'id_producto')) {
-    $DETALLE_TAB = $cand; break;
-  }
-}
 
 /* ========= EXPORT CSV ========= */
 if ($export) {
@@ -180,6 +268,7 @@ $st = $conn->prepare($countSQL);
 if ($types!=='') $st->bind_param($types, ...$params);
 $st->execute(); $totalRows = (int)($st->get_result()->fetch_assoc()['n'] ?? 0);
 
+$page = max(1,$page);
 $offset = ($page-1)*$perPage;
 $listSQL = "
   SELECT v.id, v.tag, v.nombre_cliente, v.telefono, v.forma_pago, v.total, v.`$DATE_COL` AS fecha,
@@ -210,7 +299,8 @@ body{background:#f5f7fb}.card-ghost{backdrop-filter:saturate(140%) blur(6px);bor
 </head>
 <body>
 <div class="container py-4">
-  <div class="d-flex align-items-center justify-content-between mb-3">
+
+  <div class="d-flex align-items-center justify-content-between mb-2">
     <div>
       <h3 class="mb-0">Historial · Ventas de Accesorios</h3>
       <?php $scopeText='Toda la compañía'; if($ROL==='Gerente') $scopeText='Sucursal'; if($ROL==='Ejecutivo') $scopeText='Mis ventas'; ?>
@@ -222,7 +312,11 @@ body{background:#f5f7fb}.card-ghost{backdrop-filter:saturate(140%) blur(6px);bor
     </div>
   </div>
 
-  <?php $frm_fecha_ini=$fecha_ini; $frm_fecha_fin=$fecha_fin; $frm_q=$q; $frm_forma=$forma; $frm_orden=$orden; $frm_per=$perPage; ?>
+  <?= $flash ?>
+
+  <?php
+  $frm_fecha_ini=$fecha_ini; $frm_fecha_fin=$fecha_fin; $frm_q=$q; $frm_forma=$forma; $frm_orden=$orden; $frm_per=$perPage;
+  ?>
 
   <form class="card card-ghost p-3 mb-3" method="get" id="frmFiltros">
     <div class="row g-2 align-items-end">
@@ -276,7 +370,8 @@ body{background:#f5f7fb}.card-ghost{backdrop-filter:saturate(140%) blur(6px);bor
           <tr>
             <th>Folio</th><th>TAG</th><th>Cliente</th><th>Teléfono</th>
             <th>Usuario</th><th>Sucursal</th><th>Forma</th>
-            <th class="text-end">Total</th><th>Fecha</th><th></th>
+            <th class="text-end">Total</th><th>Fecha</th>
+            <th class="text-end">Acciones</th>
           </tr>
         </thead>
         <tbody>
@@ -293,7 +388,14 @@ body{background:#f5f7fb}.card-ghost{backdrop-filter:saturate(140%) blur(6px);bor
               <td><span class="badge text-bg-light"><?= h($r['forma_pago']) ?></span></td>
               <td class="text-end"><?= money($r['total']) ?></td>
               <td><?= h(date('d/m/Y H:i', strtotime($r['fecha']))) ?></td>
-              <td class="text-end"><a class="btn btn-outline-primary btn-sm btnTicket" data-id="<?= (int)$r['id'] ?>">Ver ticket</a></td>
+              <td class="text-end">
+                <div class="btn-group btn-group-sm">
+                  <a class="btn btn-outline-primary btnTicket" data-id="<?= (int)$r['id'] ?>">Ticket</a>
+                  <?php if ($PERM_DELETE): ?>
+                    <a class="btn btn-outline-danger btnDelete" data-id="<?= (int)$r['id'] ?>">Eliminar</a>
+                  <?php endif; ?>
+                </div>
+              </td>
             </tr>
           <?php endforeach; endif; ?>
         </tbody>
@@ -317,6 +419,7 @@ body{background:#f5f7fb}.card-ghost{backdrop-filter:saturate(140%) blur(6px);bor
   </div>
 </div>
 
+<!-- Modal Ticket -->
 <div class="modal fade" id="ticketModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-xxl">
     <div class="modal-content">
@@ -349,6 +452,20 @@ document.getElementById('btnExport').addEventListener('click', ()=>{
   const frm = document.getElementById('frmFiltros');
   const params = new URLSearchParams(new FormData(frm)); params.set('export','1');
   window.location.href = window.location.pathname + '?' + params.toString();
+});
+
+// Eliminar venta (solo Admin)
+document.querySelectorAll('.btnDelete').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const id = btn.dataset.id;
+    if (!id) return;
+    if (!confirm('¿Eliminar venta #' + id + '?\nSe repondrá el stock de accesorios en inventario.')) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('action','delete');
+    url.searchParams.set('id', id);
+    // Mantener filtros/paginación actuales
+    window.location.href = url.toString();
+  });
 });
 </script>
 </body></html>

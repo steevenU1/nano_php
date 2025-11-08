@@ -1,6 +1,6 @@
 <?php
-// venta_accesorios_ticket.php — Ticket/recibo de venta de accesorios
-// Uso: venta_accesorios_ticket.php?id=123
+// venta_accesorios_ticket.php — Ticket/recibo de venta de accesorios con LOGO
+// Uso: venta_accesorios_ticket.php?id=123[&logo=https://ruta/logo.png]
 
 session_start();
 if (!isset($_SESSION['id_usuario'])) { header('Location: index.php'); exit(); }
@@ -10,6 +10,16 @@ date_default_timezone_set('America/Mexico_City');
 
 function h($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
 function money($n){ return '$'.number_format((float)$n, 2, '.', ','); }
+function col_exists(mysqli $c,$t,$col){
+  $t=$c->real_escape_string($t); $col=$c->real_escape_string($col);
+  $r=$c->query("SHOW COLUMNS FROM `{$t}` LIKE '{$col}'"); return $r && $r->num_rows>0;
+}
+function is_http_url($u){
+  if (!$u) return false;
+  $u = trim((string)$u);
+  if (strlen($u) > 500) return false;
+  return (str_starts_with($u, 'http://') || str_starts_with($u, 'https://'));
+}
 
 $id = (int)($_GET['id'] ?? 0);
 if ($id <= 0) { http_response_code(400); echo "ID inválido."; exit; }
@@ -20,6 +30,7 @@ $sqlVenta = "
     v.*,
     u.nombre   AS usuario_nombre,
     s.nombre   AS sucursal_nombre
+    ".(col_exists($conn,'sucursales','logo_url') ? ", s.logo_url AS sucursal_logo_url" : "")."
   FROM ventas_accesorios v
   LEFT JOIN usuarios   u ON u.id = v.id_usuario
   LEFT JOIN sucursales s ON s.id = v.id_sucursal
@@ -59,9 +70,23 @@ $efectivo    = (float)($venta['efectivo'] ?? 0);
 $tarjeta     = (float)($venta['tarjeta'] ?? 0);
 $total       = (float)($venta['total'] ?? 0);
 $comentarios = $venta['comentarios'] ?? '';
-$fecha       = $venta['created_at'] ?? $venta['fecha'] ?? date('Y-m-d H:i:s'); // por si no tienes created_at
+$fecha       = $venta['created_at'] ?? $venta['fecha'] ?? date('Y-m-d H:i:s');
 $usuarioNom  = $venta['usuario_nombre'] ?? ('Usuario #'.(int)($venta['id_usuario'] ?? 0));
 $sucursalNom = $venta['sucursal_nombre'] ?? ('Sucursal #'.(int)($venta['id_sucursal'] ?? 0));
+
+// ---- Resolver LOGO ----
+$DEFAULT_LOGO = 'https://i.ibb.co/bjp3PF0j/2d7af8d4-c3df-4046-b550-fc31638d5196-1.png';
+$logoUrl = $DEFAULT_LOGO;
+
+// prioridad 1: query param ?logo=
+if (isset($_GET['logo']) && is_http_url($_GET['logo'])) {
+  $logoUrl = $_GET['logo'];
+}
+// prioridad 2: campo de sucursal si existe y viene con valor
+elseif (!empty($venta['sucursal_logo_url']) && is_http_url($venta['sucursal_logo_url'])) {
+  $logoUrl = $venta['sucursal_logo_url'];
+}
+
 ?>
 <!doctype html>
 <html lang="es">
@@ -71,33 +96,61 @@ $sucursalNom = $venta['sucursal_nombre'] ?? ('Sucursal #'.(int)($venta['id_sucur
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
+    :root{
+      --ticket-max: 860px;    /* en pantalla */
+      --ticket-pad: 16px;
+      --logo-h: 64px;         /* alto de logo en pantalla */
+    }
     @media print {
+      :root{
+        --ticket-max: 86mm;   /* ancho tipo ticket térmico (80–90mm aprox) */
+        --ticket-pad: 8px;
+        --logo-h: 56px;       /* un poco más compacto en impresión */
+      }
       .no-print { display: none !important; }
       body { background: #fff; }
       .card { box-shadow: none !important; border: 0 !important; }
+      .container { max-width: var(--ticket-max) !important; }
     }
     body { background: #f5f6f8; }
+    .container { max-width: var(--ticket-max); }
+    .ticket-card { border:1px solid #e9ecef; }
     .table-sm td, .table-sm th { padding-top: .35rem; padding-bottom: .35rem; }
     .lh-tight { line-height: 1.1; }
+    .brand-logo {
+      height: var(--logo-h);
+      width: auto;
+      object-fit: contain;
+      image-rendering: -webkit-optimize-contrast;
+    }
+    .brand-name { font-weight: 700; letter-spacing: .2px; }
+    .muted { color:#6c757d; }
   </style>
 </head>
 <body>
 <div class="container my-4">
-  <div class="card shadow-sm">
-    <div class="card-body">
-      <div class="d-flex justify-content-between align-items-start">
-        <div>
-          <h4 class="mb-0">Ticket de Venta — Accesorios</h4>
-          <small class="text-muted">Folio #<?= (int)$folio ?> · TAG: <?= h($tag) ?></small>
+  <div class="card shadow-sm ticket-card">
+    <div class="card-body" style="padding: var(--ticket-pad);">
+
+      <!-- Encabezado con LOGO -->
+      <div class="d-flex align-items-center justify-content-between gap-3">
+        <div class="d-flex align-items-center gap-3">
+          <img src="<?= h($logoUrl) ?>" alt="Logo" class="brand-logo" onerror="this.style.display='none'">
+          <div class="lh-tight">
+            <div class="brand-name"><?= h($sucursalNom) ?></div>
+            <small class="text-muted">Ticket de Venta — Accesorios</small>
+          </div>
         </div>
         <div class="text-end">
-          <button class="btn btn-outline-secondary btn-sm no-print" onclick="window.print()">Imprimir</button>
-          <a href="venta_accesorios.php" class="btn btn-success btn-sm no-print">Nueva venta</a>
+          <div class="fw-semibold">Folio #<?= (int)$folio ?></div>
+          <small class="text-muted">TAG: <?= h($tag) ?></small><br>
+          <button class="btn btn-outline-secondary btn-sm no-print mt-1" onclick="window.print()">Imprimir</button>
         </div>
       </div>
 
-      <hr>
+      <hr class="my-3">
 
+      <!-- Datos del cliente / sucursal / fecha -->
       <div class="row g-3 mb-2">
         <div class="col-md-4">
           <div class="small text-muted">Cliente</div>
@@ -116,6 +169,7 @@ $sucursalNom = $venta['sucursal_nombre'] ?? ('Sucursal #'.(int)($venta['id_sucur
         </div>
       </div>
 
+      <!-- Detalle -->
       <div class="table-responsive">
         <table class="table table-sm">
           <thead class="table-light">

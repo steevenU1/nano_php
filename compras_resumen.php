@@ -58,9 +58,25 @@ $sqlWhere = count($where) ? ('WHERE '.implode(' AND ', $where)) : '';
 $proveedores = $conn->query("SELECT id, nombre FROM proveedores WHERE activo=1 ORDER BY nombre");
 $sucursales  = $conn->query("SELECT id, nombre FROM sucursales ORDER BY nombre");
 
-// ====== Agregador de ingresos robusto (SUM(cantidad) o COUNT(*)) ======
-$hasCantIngreso = table_exists($conn, 'compras_detalle_ingresos') && column_exists($conn, 'compras_detalle_ingresos', 'cantidad');
-$ingSub = $hasCantIngreso ? 'SUM(cantidad)' : 'COUNT(*)';
+// ====== Agregador de ingresos robusto y compatible (plural/singular) ======
+$ingTable = null;
+if (table_exists($conn, 'compras_detalle_ingresos')) {
+  $ingTable = 'compras_detalle_ingresos';
+} elseif (table_exists($conn, 'compras_detalle_ingreso')) { // compatibilidad singular
+  $ingTable = 'compras_detalle_ingreso';
+}
+
+if ($ingTable) {
+  $hasCantidadCol = column_exists($conn, $ingTable, 'cantidad');
+  // SUM(IFNULL(cantidad,1)) cubre equipos (1) y accesorios (N)
+  $ingSubExpr = $hasCantidadCol ? 'SUM(IFNULL(cantidad,1))' : 'COUNT(*)';
+  $ingSource  = $ingTable; // nombre real de la tabla
+} else {
+  // No existe tabla de ingresos: usar fuente vacía para no romper ni marcar pendientes falsos
+  $ingSubExpr = 'SUM(0)';
+  // subconsulta vacía con las columnas esperadas
+  $ingSource  = '(SELECT NULL AS id_detalle, 0 AS cantidad LIMIT 0) AS compras_detalle_ingresos';
+}
 
 // ====== Consulta principal ======
 $sql = "
@@ -95,8 +111,8 @@ $sql = "
       MIN( CASE WHEN d.cantidad > IFNULL(x.ing,0) THEN d.id END ) AS primer_detalle_pendiente
     FROM compras_detalle d
     LEFT JOIN (
-      SELECT id_detalle, {$ingSub} AS ing
-      FROM compras_detalle_ingresos
+      SELECT id_detalle, {$ingSubExpr} AS ing
+      FROM {$ingSource}
       GROUP BY id_detalle
     ) x ON x.id_detalle = d.id
     GROUP BY d.id_compra
@@ -104,20 +120,53 @@ $sql = "
   $sqlWhere
   ORDER BY c.fecha_factura DESC, c.id DESC
 ";
+
 $stmt = $conn->prepare($sql);
 if ($stmt === false) { die("Error en prepare: ".$conn->error); }
 if (strlen($types) > 0) { $stmt->bind_param($types, ...$params); }
 $stmt->execute();
-$res = $stmt->get_result();
+
+// === Lectura sin mysqlnd (bind_result) ===
+$stmt->bind_result(
+  $r_id,
+  $r_num_factura,
+  $r_fecha_factura,
+  $r_fecha_vencimiento,
+  $r_subtotal,
+  $r_iva,
+  $r_total,
+  $r_estatus,
+  $r_id_proveedor,
+  $r_proveedor,
+  $r_sucursal,
+  $r_pagado,
+  $r_saldo,
+  $r_pend_ingreso,
+  $r_primer_detalle_pend
+);
 
 // Cargar filas en memoria
 $rows = [];
-while($row = $res->fetch_assoc()){
-  $row['total']  = (float)$row['total'];
-  $row['pagado'] = (float)$row['pagado'];
-  $row['saldo']  = (float)$row['saldo'];
-  $rows[] = $row;
+while ($stmt->fetch()) {
+  $rows[] = [
+    'id'                      => (int)$r_id,
+    'num_factura'             => $r_num_factura,
+    'fecha_factura'           => $r_fecha_factura,
+    'fecha_vencimiento'       => $r_fecha_vencimiento,
+    'subtotal'                => (float)$r_subtotal,
+    'iva'                     => (float)$r_iva,
+    'total'                   => (float)$r_total,
+    'estatus'                 => $r_estatus,
+    'id_proveedor'            => (int)$r_id_proveedor,
+    'proveedor'               => $r_proveedor,
+    'sucursal'                => $r_sucursal,
+    'pagado'                  => (float)$r_pagado,
+    'saldo'                   => (float)$r_saldo,
+    'pendientes_ingreso'      => (int)$r_pend_ingreso,
+    'primer_detalle_pendiente'=> (int)$r_primer_detalle_pend,
+  ];
 }
+$stmt->close();
 
 // ====== KPIs y métricas ======
 $totalCompras = 0.0;
@@ -159,11 +208,11 @@ foreach ($rows as $r) {
       elseif ($daysOver <= 90) $aging['d61_90'] += $saldo;
       else                     $aging['d90p']   += $saldo;
 
-      $vencidas[] = $r + ['dias' => -$diffDays];
+      $tmp = $r; $tmp['dias'] = -$diffDays; $vencidas[] = $tmp;
     } else {
       if ($diffDays <= $pxdias) {
         $saldoPorVencer += $saldo;
-        $porVencer[] = $r + ['dias' => $diffDays];
+        $tmp = $r; $tmp['dias'] = $diffDays; $porVencer[] = $tmp;
       }
       $aging['current'] += $saldo;
     }
@@ -180,8 +229,10 @@ foreach ($rows as $r) {
   $saldo = max(0, (float)$r['saldo']);
   if ($r['estatus'] === 'Pagada' || $saldo <= 0) continue;
   $pid = (int)$r['id_proveedor'];
-  $saldoPorProveedor[$pid]['proveedor'] = $r['proveedor'];
-  $saldoPorProveedor[$pid]['saldo'] = ($saldoPorProveedor[$pid]['saldo'] ?? 0) + $saldo;
+  if (!isset($saldoPorProveedor[$pid])) {
+    $saldoPorProveedor[$pid] = ['proveedor'=>$r['proveedor'], 'saldo'=>0.0];
+  }
+  $saldoPorProveedor[$pid]['saldo'] += $saldo;
 }
 usort($saldoPorProveedor, function($a,$b){ return ($b['saldo'] ?? 0) <=> ($a['saldo'] ?? 0); });
 $topProv = array_slice($saldoPorProveedor, 0, 5, true);

@@ -170,7 +170,15 @@ $grpCompras    = ['compras_nueva.php', 'compras_resumen.php', 'modelos.php', 'pr
 $grpEfectivo   = ['cobros.php', 'cortes_caja.php', 'generar_corte.php', 'depositos_sucursal.php', 'depositos.php', 'recoleccion_comisiones.php'];
 $grpOperacion  = ['lista_precios.php', 'prospectos.php', 'insumos_pedido.php', 'insumos_admin.php', 'gestionar_usuarios.php', 'mantenimiento_solicitar.php', 'mantenimiento_admin.php', 'panel_operador.php'];
 $grpRH         = ['reporte_nomina.php', 'reporte_nomina_gerentes_zona.php', 'admin_expedientes.php'];
-$grpOperativos = ['insumos_catalogo.php', 'actualizar_precios_modelo.php', 'cuotas_mensuales.php', 'cuotas_mensuales_ejecutivos.php', 'cuotas_sucursales.php', 'cargar_cuotas_semanales.php', 'esquemas_comisiones_ejecutivos.php', 'esquemas_comisiones_gerentes.php', 'esquemas_comisiones_pospago.php', 'comisiones_especiales_equipos.php', 'carga_masiva_productos.php', 'carga_masiva_sims.php', 'alta_usuario.php', 'alta_sucursal.php'];
+$grpOperativos = [
+  'tickets_nuevo.php', // ✅ NUEVO: para que resalte el padre
+  'insumos_catalogo.php', 'actualizar_precios_modelo.php',
+  'cuotas_mensuales.php', 'cuotas_mensuales_ejecutivos.php', 'cuotas_sucursales.php',
+  'cargar_cuotas_semanales.php', 'esquemas_comisiones_ejecutivos.php',
+  'esquemas_comisiones_gerentes.php', 'esquemas_comisiones_pospago.php',
+  'comisiones_especiales_equipos.php', 'carga_masiva_productos.php',
+  'carga_masiva_sims.php', 'alta_usuario.php', 'alta_sucursal.php'
+];
 $grpCeleb      = ['cumples_aniversarios.php', 'cuadro_honor.php'];
 
 // Nombre corto para topbar
@@ -546,6 +554,20 @@ $nombreCorto = firstName($nombreUsuario);
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle<?= parentActive($grpOperativos) ?>" href="#" role="button" data-bs-toggle="dropdown"><i class="bi bi-hdd-network me-1"></i>Operativos</a>
             <ul class="dropdown-menu dropdown-menu-dark">
+              <li class="nav-item dropdown">
+    <a class="nav-link dropdown-toggle<?= parentActive($grpOperativos) ?>" href="#" role="button" data-bs-toggle="dropdown">
+      <i class="bi bi-hdd-network me-1"></i>Operativos
+    </a>
+    <ul class="dropdown-menu dropdown-menu-dark">
+
+      <?php if ($rolUsuario === 'Admin'): ?>
+        <li>
+          <a class="dropdown-item<?= isActive(['tickets_nuevo.php']) ?>" href="tickets_nuevo.php">
+            <i class="bi bi-ticket-detailed me-2"></i>Tickets Central
+          </a>
+        </li>
+        <li><hr class="dropdown-divider"></li>
+      <?php endif; ?>
               <li><a class="dropdown-item<?= isActive(['insumos_catalogo.php']) ?>" href="insumos_catalogo.php"><i class="bi bi-box2 me-2"></i>Catálogo de insumos</a></li>
               <li><a class="dropdown-item<?= isActive(['actualizar_precios_modelo.php']) ?>" href="actualizar_precios_modelo.php"><i class="bi bi-coin me-2"></i>Actualizar precios</a></li>
               <li><a class="dropdown-item<?= isActive(['cuotas_mensuales.php']) ?>" href="cuotas_mensuales.php"><i class="bi bi-graph-up-arrow me-2"></i>Cuotas mensuales</a></li>
